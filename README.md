@@ -1,6 +1,25 @@
 # Losy Świata
 
-Plan dalszego rozwoju mechanik strategicznych: [docs/ROADMAP_STRATEGICZNA.md](docs/ROADMAP_STRATEGICZNA.md).
+Strategiczna gra przeglądarkowa o państwach, granicach i długofalowych konsekwencjach wojen. Aktualna wersja działa pod adresem: https://losy-swiata.shaughnessy.chatgpt.site
+
+Najważniejszy dokument projektowy: [docs/ROADMAP_STRATEGICZNA.md](docs/ROADMAP_STRATEGICZNA.md).
+
+## Uruchomienie lokalne
+
+Wymagany jest Node.js 22.13 lub nowszy.
+
+```bash
+npm install
+npm run dev
+```
+
+Testy i pełna walidacja projektu:
+
+```bash
+npm test
+```
+
+Poniżej znajdują się techniczne informacje o środowisku projektu.
 
 A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
