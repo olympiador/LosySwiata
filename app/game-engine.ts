@@ -8,7 +8,7 @@ import { ADMIN1_DEFLATE_BASE64, ADMIN1_HEIGHT, ADMIN1_ISO, ADMIN1_NAMES, ADMIN1_
 import { ELEVATION_HEIGHT, ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH } from "./elevation-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
-import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, type CountryCapabilityState, type CapabilityDelta } from "./country-capability";
+import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, type CountryCapabilityState, type CapabilityDelta, type RegimeType } from "./country-capability";
 
 export const MAP_W = 4320;
 export const MAP_H = 2160;
@@ -1328,6 +1328,30 @@ export class WorldEngine {
     }
     return 1;
   }
+
+  getCountryRegimeType(countryId: number) {
+    return this.countryCapabilityStates[countryId]?.regimeType ?? null;
+  }
+
+  getCountryInformationEnvironment(countryId: number) {
+    return this.countryCapabilityStates[countryId]?.informationEnvironment ?? null;
+  }
+
+  getCountryCombatExperience(countryId: number) {
+    return this.countryCapabilityStates[countryId]?.combatExperience ?? 0;
+  }
+
+  getRegimeLabel(regimeType: RegimeType) {
+    return regimeType === "totalitarian" ? "Totalitaryzm" : regimeType === "authoritarian" ? "Autorytaryzm" : "Demokracja";
+  }
+
+  getInformationEnvironmentLabel(score: number) {
+    if (score >= 80) return "Pełna kontrola";
+    if (score >= 65) return "Silna kontrola";
+    if (score >= 50) return "Częściowa kontrola";
+    if (score >= 35) return "Ograniczona kontrola";
+    return "Wolne media";
+  }
   getMapRevision() { return this.visualRevision; }
   getPlayerDefensePolicy() {
     if (this.playerCountryId === null || this.gameMode !== "strategy") return null;
@@ -1751,7 +1775,34 @@ export class WorldEngine {
       if (campaign.defenderId === countryId) incoming++;
     }
     for (const occupation of this.strategicOccupations) if (occupation.ownerId === countryId && occupation.progress < 100) activeOccupations++;
-    return { hasOutgoing: outgoing > 0, hasIncoming: incoming > 0, activeOccupations, areaShare: 1 };
+    return {
+      hasOutgoing: outgoing > 0,
+      hasIncoming: incoming > 0,
+      activeOccupations,
+      areaShare: 1,
+      foreignBasePressure: this.foreignBasePressure(countryId),
+    };
+  }
+
+  private foreignBasePressure(countryId: number): number {
+    const neighbours = new Set<number>();
+    for (const region of this.strategicRegions) {
+      if (region.ownerId === countryId) {
+        for (const neighbourId of region.neighbours) neighbours.add(neighbourId);
+      }
+    }
+    if (!neighbours.size) return 0;
+    let pressure = 0;
+    for (const neighbourId of neighbours) {
+      const neighbourState = this.countryCapabilityStates[neighbourId];
+      if (!neighbourState) continue;
+      const hasCampaign = this.strategicCampaigns.some((c) => c.attackerId === neighbourId || c.defenderId === neighbourId);
+      if (hasCampaign) pressure += 0.3;
+      if (neighbourState.combatExperience > 15) pressure += 0.2;
+      if (neighbourState.informationEnvironment.mediaControl > 70) pressure += 0.15;
+      if (neighbourState.informationEnvironment.servicesStrength > 70) pressure += 0.15;
+    }
+    return Math.max(0, Math.min(1, pressure / neighbours.size));
   }
 
   private advanceCapabilityStates() {
