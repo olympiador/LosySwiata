@@ -46,5 +46,11 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "Losy Świata"
+  "displayName": "Losy Świata",
+  "allowScripts": {
+    "sharp@0.34.5": true,
+    "unrs-resolver@1.11.1": true,
+    "workerd@1.20260515.1": true,
+    "esbuild@0.27.3": true
+  }
 }
