@@ -5,6 +5,13 @@ export type CountryCapabilityState = {
   uncertainty: number;
   lastEvaluatedTurn: number;
   change: StrategicComponents;
+  manpower: {
+    available: number;
+    active: number;
+    reserves: number;
+    mobilization: "hidden" | "open" | "full";
+    maintenanceCost: number;
+  };
 };
 
 export const COMPONENT_KEYS = ["economy", "population", "technology", "logistics", "military", "stability"] as const;
@@ -29,6 +36,17 @@ export function componentLabel(key: ComponentKey): string {
   }[key];
 }
 
+function initialManpower(countryId: number) {
+  const base = 18 + ((countryId * 311.4) % 34);
+  return {
+    available: Math.round(20 + ((countryId * 89.33) % 35)),
+    active: Math.round(base * 0.6),
+    reserves: Math.round(base * 0.4),
+    mobilization: "hidden" as const,
+    maintenanceCost: Math.round(base * 0.08),
+  };
+}
+
 export function initialCapabilityStates(countries: Country[]): CountryCapabilityState[] {
   return countries.map((country) => ({
     components: {
@@ -49,6 +67,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       military: 0,
       stability: 0,
     },
+    manpower: initialManpower(country.id),
   }));
 }
 
@@ -71,33 +90,49 @@ export function evaluateCapabilityChange(
     military: clamp((baseline.military - state.components.military) * 0.07 + (context.hasOutgoing ? 0.35 : -0.08) + (mix - 0.5) * 0.9),
     stability: clamp((baseline.stability - state.components.stability) * 0.04 + (context.hasIncoming ? -0.25 : 0.06) + occupationLoad * 0.9 + (mix - 0.5) * 0.45),
   };
+  const population = state.components.population + change.population;
+  const military = state.components.military + change.military;
+  const activeManpower = Math.max(0, Math.round(military * 0.55));
+  const reserves = Math.max(0, Math.round(population * 0.12 - activeManpower));
+  const mobilization = state.manpower.mobilization;
+  const mobilizationMultiplier = mobilization === "full" ? 1.35 : mobilization === "open" ? 1.18 : 1;
+  const frontCount = context.hasOutgoing ? 1 : 0;
+  const maintenanceCost = Math.round((military * 0.08 + frontCount * 6 + (mobilization === "full" ? 14 : mobilization === "open" ? 7 : 0)) * 10) / 10;
   return {
     components: {
       economy: clamp(state.components.economy + change.economy),
-      population: clamp(state.components.population + change.population),
+      population: clamp(population),
       technology: clamp(state.components.technology + change.technology),
       logistics: clamp(state.components.logistics + change.logistics),
-      military: clamp(state.components.military + change.military),
+      military: clamp(military),
       stability: clamp(state.components.stability + change.stability),
     },
     uncertainty: clamp(state.uncertainty * 0.985 + 0.002 + (context.areaShare > 1.2 ? 0.015 : 0)),
     lastEvaluatedTurn: turn,
     change,
+    manpower: {
+      available: Math.max(0, Math.round(population * 0.22 * mobilizationMultiplier)),
+      active: Math.min(activeManpower, Math.max(0, Math.round(population * 0.22 * mobilizationMultiplier))),
+      reserves: Math.max(0, reserves),
+      mobilization: state.manpower.mobilization,
+      maintenanceCost,
+    },
   };
 }
 
 export function capabilityStateToSnapshotArray(states: CountryCapabilityState[]) {
-  return states.map(({ components, uncertainty, lastEvaluatedTurn, change }) => ({
+  return states.map(({ components, uncertainty, lastEvaluatedTurn, change, manpower }) => ({
     components,
     uncertainty: Math.round(uncertainty * 1000) / 1000,
     lastEvaluatedTurn,
     change,
+    manpower,
   }));
 }
 
 export function loadCapabilityStatesFromSnapshot(
   countries: Country[],
-  entries?: Array<{ components: StrategicComponents; uncertainty: number; lastEvaluatedTurn?: number; change: StrategicComponents }>,
+  entries?: Array<{ components: StrategicComponents; uncertainty: number; lastEvaluatedTurn?: number; change: StrategicComponents; manpower?: CountryCapabilityState["manpower"] }>,
 ) {
   const defaults = initialCapabilityStates(countries);
   if (!entries?.length) return defaults;
@@ -116,6 +151,7 @@ export function loadCapabilityStatesFromSnapshot(
       uncertainty: clamp(entry.uncertainty, 0.05, 1),
       lastEvaluatedTurn: entry.lastEvaluatedTurn ?? 0,
       change: entry.change,
+      manpower: entry.manpower ?? initialManpower(country.id),
     };
   });
 }

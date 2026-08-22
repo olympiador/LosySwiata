@@ -1307,12 +1307,26 @@ export class WorldEngine {
   activatePlayerMobilization() {
     if (this.playerCountryId === null || this.gameMode !== "strategy" || this.turn < this.strategicDefenseState.mobilizationCooldownUntil) return false;
     if (!this.strategicCampaigns.some(({ defenderId }) => defenderId === this.playerCountryId)) return false;
-    // Exclusive boundary: the next two quarterly resolutions receive the bonus.
     this.strategicDefenseState.mobilizedUntil = this.turn + 3;
     this.strategicDefenseState.mobilizationCooldownUntil = this.turn + 8;
     this.strategicExhaustion[this.playerCountryId] = Math.min(100, (this.strategicExhaustion[this.playerCountryId] ?? 0) + 12);
+    const state = this.countryCapabilityStates[this.playerCountryId];
+    if (state) state.manpower.mobilization = "open";
     this.strategicPowerCache.clear();
     return true;
+  }
+
+  getMobilizationMultiplier(countryId: number) {
+    if (this.gameMode !== "strategy") return 1;
+    const state = this.countryCapabilityStates[countryId];
+    if (!state) return 1;
+    const mobilization = state.manpower.mobilization;
+    if (mobilization === "full") return 1.35;
+    if (mobilization === "open") {
+      if (countryId === this.playerCountryId && this.turn < this.strategicDefenseState.mobilizedUntil - 1) return 1.25;
+      return 1.1;
+    }
+    return 1;
   }
   getMapRevision() { return this.visualRevision; }
   getPlayerDefensePolicy() {
@@ -1474,6 +1488,24 @@ export class WorldEngine {
         trend: delta > 0.02 ? "up" : delta < -0.02 ? "down" : "flat",
       };
     });
+  }
+
+  getCountryManpower(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    if (!state) return null;
+    return state.manpower;
+  }
+
+  setCountryMobilization(countryId: number, mobilization: "hidden" | "open" | "full") {
+    const state = this.countryCapabilityStates[countryId];
+    if (!state || this.gameMode !== "strategy") return false;
+    state.manpower.mobilization = mobilization;
+    return true;
+  }
+
+  getPlayerMobilization() {
+    if (this.playerCountryId === null) return null;
+    return this.countryCapabilityStates[this.playerCountryId]?.manpower.mobilization ?? null;
   }
 
   private frontStrength(attackerId: number, defenderId: number, regionId: number | null = null): StrategicFrontStrength {
