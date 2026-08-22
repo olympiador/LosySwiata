@@ -20,6 +20,8 @@ import {
   type GameRegion,
   type MapStyle,
   type MicrostateRule,
+  type PolicyDecisionId,
+  type PlayerPolicyDecision,
   type StrategicCampaign,
   type StrategicDefensePosture,
   type StrategicOccupation,
@@ -1117,8 +1119,9 @@ export default function Home() {
     const regimeType = engine.getCountryRegimeType(countryId);
     const informationEnvironment = engine.getCountryInformationEnvironment(countryId);
     const combatExperience = engine.getCountryCombatExperience(countryId);
-    return { countryId, regions, provinceCount, strength, outgoing, incoming, occupations, attackableRegions, assessment, capabilityChanges, manpower, regimeType, informationEnvironment, combatExperience };
-  }, [engine, gameMode, playerCountryId, selected, strategicCampaigns, strategicOccupations, strategicRegions, strategicTargets]);
+    const playerPolicyState = playerCountryId === countryId ? engine.getPlayerPolicyState() : null;
+    return { countryId, regions, provinceCount, strength, outgoing, incoming, occupations, attackableRegions, assessment, capabilityChanges, manpower, regimeType, informationEnvironment, combatExperience, playerPolicyState };
+  }, [engine, gameMode, playerCountryId, selected, strategicCampaigns, strategicOccupations, strategicRegions, strategicTargets, dataVersion]);
   const playerOccupations = useMemo(() => playerCountryId === null ? [] : strategicOccupations.filter(({ ownerId, progress }) => ownerId === playerCountryId && progress < 100), [playerCountryId, strategicOccupations]);
   const changeDefensePosture = useCallback((posture: StrategicDefensePosture, focusRegionId: number | null = null) => {
     if (!engine || busy) return;
@@ -1308,6 +1311,11 @@ export default function Home() {
               {selectedDossier?.manpower && <div className="manpower-card"><header><b>SIŁY ZBROJNE</b><span>dane wywiadu</span></header><div><span><small>Dysponujacy</small><b>{selectedDossier.manpower.available}</b><small>na {selectedDossier.manpower.active} aktywnych, {selectedDossier.manpower.reserves} rezerwy</small></span><span><small>Koszt utrzymania</small><b>{selectedDossier.manpower.maintenanceCost.toFixed(1)}</b><small>jednostek/kwartał</small></span><span><small>Mobilizacja</small><b>{selectedDossier.manpower.mobilization === "hidden" ? "Ukryta" : selectedDossier.manpower.mobilization === "open" ? "Jawna" : "Pełna"}</b><small>{selectedDossier.manpower.mobilization === "full" ? "+35% obrony" : selectedDossier.manpower.mobilization === "open" ? "+10-25% obrony" : "zwykła gotowość"}</small></span></div></div>}
               {selectedDossier?.regimeType && <section className="regime-card"><header><b>REŻIM</b><span>typ systemu politycznego</span></header><div><span><small>System</small><b>{engine?.getRegimeLabel(selectedDossier.regimeType)}</b></span><span><small>Doświadczenie bojowe</small><b>{Math.round(selectedDossier.combatExperience)}</b><small>punktów</small></span></div></section>}
               {selectedDossier?.informationEnvironment && <section className="information-card"><header><b>ŚRODOWISKO INFORMACYJNE</b><span>{engine?.getInformationEnvironmentLabel(selectedDossier.informationEnvironment.score)}</span></header><div><span><small>Technologia</small><b>{Math.round(selectedDossier.informationEnvironment.techComponent)}</b><small>dostęp do platform</small></span><span><small>Kontrola mediów</small><b>{Math.round(selectedDossier.informationEnvironment.mediaControl)}</b><small>cenzura/propaganda</small></span><span><small>Służby specjalne</small><b>{Math.round(selectedDossier.informationEnvironment.servicesStrength)}</b><small>inwigilacja</small></span></div></section>}
+              {selectedDossier?.playerPolicyState && selectedDossier.countryId === playerCountryId && (() => {
+                const policyState = selectedDossier.playerPolicyState;
+                const policies = engine ? engine.getAvailablePlayerPolicies(playerCountryId) : [];
+                return <section className="policy-card"><header><b>DECYZJE PREZYDENTA</b><span>punkty decyzyjne: <b className="policy-points">{policyState.decisionPoints}</b></span></header><div className="policy-list">{policies.length ? policies.map((policy) => <div key={policy.id} className="policy-item"><div><small>{policy.name}</small><b>{policy.cost} PD · {policy.cooldown} kw. cooldown</b><small>{policy.description}</small></div><button disabled={busy || policyState.decisionPoints < policy.cost || policy.lastUsedTurn > 0} onClick={() => { if (engine && engine.activatePlayerPolicy(policy.id)) { refresh(engine); autosave(engine); notify(`Aktywowano: ${policy.name}`); } }}>Wykonaj</button></div>) : <small>Brak dostępnych aktów w tej turze.</small>}</div></section>;
+              })()}
             </div>
             {playerOccupations.length > 0 && <section className="occupation-list"><header><b>ASYMILACJA ZDOBYCZY</b><span>{playerOccupations.length} równocześnie · wolniej</span></header>{playerOccupations.slice(0, 5).map((occupation) => <div key={occupation.regionId}><span>{strategicRegions[occupation.regionId]?.name}</span><b>{Math.round(occupation.progress)}%</b><i><em style={{ width: `${occupation.progress}%` }} /></i><small>+{occupation.lastGain.toFixed(1)} pkt/kw.</small></div>)}</section>}
             {playerDefensePolicy && <div className="diplomatic-balance"><span>◉ RÓWNOWAGA SIŁ</span><p>{playerDefensePolicy.protectedRounds > 0 ? `Pakt o nieagresji: jeszcze ${playerDefensePolicy.protectedRounds} ${playerDefensePolicy.protectedRounds === 1 ? "kwartał" : "kwartały"}.` : `Przeciw Tobie może trwać jednocześnie maksymalnie ${playerDefensePolicy.maxIncoming === 1 ? "1 kampania" : "2 kampanie"}.`}</p></div>}

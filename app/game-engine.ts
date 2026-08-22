@@ -8,7 +8,7 @@ import { ADMIN1_DEFLATE_BASE64, ADMIN1_HEIGHT, ADMIN1_ISO, ADMIN1_NAMES, ADMIN1_
 import { ELEVATION_HEIGHT, ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH } from "./elevation-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
-import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, type CountryCapabilityState, type CapabilityDelta, type RegimeType } from "./country-capability";
+import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, type CountryCapabilityState, type CapabilityDelta, type RegimeType } from "./country-capability";
 
 export const MAP_W = 4320;
 export const MAP_H = 2160;
@@ -85,6 +85,9 @@ export type StrategicTerritoryEvent = {
 export type StrategicRoundResult = { records: TurnRecord[]; changedIndices: number[] };
 export type StrategicDefensePosture = "continue" | "general" | "sector";
 export type StrategicDefenseState = { posture: StrategicDefensePosture; focusRegionId: number | null; mobilizedUntil: number; mobilizationCooldownUntil: number };
+export type PolicyDecisionId = "media-oversight" | "research-program" | "full-mobilization" | "open-borders" | "close-borders" | "propaganda-offensive" | "diplomatic-pressure" | "selective-immigration" | "mass-immigration-former-colonies";
+export type PlayerPolicyDecision = { id: PolicyDecisionId; name: string; description: string; cost: number; effects: Partial<CountryCapabilityState["components"]> & { informationEnvironment?: Partial<CountryCapabilityState["informationEnvironment"]>; manpower?: Partial<CountryCapabilityState["manpower"]>; immigrationPolicy?: "closed" | "selective" | "open" | "mass"; technologyBurst?: number; stabilityDelta?: number }; costs: Partial<CountryCapabilityState["components"]> & { stabilityDelta?: number; economyDelta?: number }; duration?: number; cooldown: number; lastUsedTurn: number; condition?: (state: CountryCapabilityState) => boolean; };
+export type PlayerPolicyState = { decisions: Record<PolicyDecisionId, PlayerPolicyDecision>; activePolicies: PlayerPolicyDecision[]; decisionPoints: number; lastDecisionTurn: number };
 export type StrategicComponents = { economy: number; population: number; technology: number; logistics: number; military: number; stability: number };
 export type StrategicStrength = { power: number; rating: number; rank: number; activeCountries: number; tier: "Potęga" | "Silne" | "Średnie" | "Słabe"; components: StrategicComponents; exhaustion: number; integration: number };
 export type StrategicStrengthEntry = StrategicStrength & { countryId: number };
@@ -605,6 +608,7 @@ export class WorldEngine {
   private coastlines: Path2D | null = null;
   private outlineCacheKey = "";
   private outlinePath: Path2D | null = null;
+  private readonly SANCTIONED_ISO3 = new Set(["RUS", "BLR"]);
   private directionTargetCache = new Map<string, DirectionHit | null>();
   private strategicProvinceAt = new Int32Array(0);
   private strategicAdministrativeAt = new Int32Array(0);
@@ -626,6 +630,7 @@ export class WorldEngine {
   private capabilityChangedThisTurn = false;
   private highlightOutlineKey = "";
   private highlightOutline: Path2D | null = null;
+  private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 0, lastDecisionTurn: 0 };
 
   private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0)) {
     this.countries = countries;
@@ -1805,16 +1810,93 @@ export class WorldEngine {
     return Math.max(0, Math.min(1, pressure / neighbours.size));
   }
 
+  getPlayerPolicyState(): PlayerPolicyState {
+    return this.playerPolicyState;
+  }
+
+  activatePlayerPolicy(policyId: PolicyDecisionId) {
+    if (this.gameMode !== "strategy" || this.playerCountryId === null) return false;
+    const policy = this.playerPolicyState.decisions[policyId];
+    if (!policy || this.playerPolicyState.decisionPoints < policy.cost) return false;
+    if (policy.duration && policy.lastUsedTurn + policy.cooldown > this.turn) return false;
+    if (policy.condition) {
+      const state = this.countryCapabilityStates[this.playerCountryId];
+      if (!state || !policy.condition(state)) return false;
+    }
+    this.playerPolicyState.decisionPoints -= policy.cost;
+    this.playerPolicyState.lastDecisionTurn = this.turn;
+    const activated = { ...policy, lastUsedTurn: this.turn };
+    this.playerPolicyState.activePolicies = [...this.playerPolicyState.activePolicies.filter((p) => p.id !== policyId), activated];
+    this.playerPolicyState.decisions = { ...this.playerPolicyState.decisions, [policyId]: activated };
+    this.strategicComponentCache.clear();
+    this.strategicPowerCache.clear();
+    return true;
+  }
+
+  getAvailablePlayerPolicies(countryId: number): PlayerPolicyDecision[] {
+    const state = this.countryCapabilityStates[countryId];
+    if (!state) return [];
+    const policies = Object.values(this.playerPolicyState.decisions);
+    const now = this.turn;
+    return policies.filter((policy) => {
+      if (this.playerPolicyState.decisionPoints < policy.cost) return false;
+      if (policy.duration && policy.lastUsedTurn + policy.cooldown > now) return false;
+      if (policy.condition && !policy.condition(state)) return false;
+      return true;
+    });
+  }
+
+  private advancePlayerPolicies() {
+    if (this.gameMode !== "strategy" || this.playerCountryId === null) return;
+    if (this.playerPolicyState.lastDecisionTurn !== this.turn) {
+      this.playerPolicyState.decisionPoints = Math.min(2, this.playerPolicyState.decisionPoints + 1);
+    }
+    this.playerPolicyState.activePolicies = this.playerPolicyState.activePolicies.filter((policy) => {
+      if (!policy.duration) return true;
+      return policy.lastUsedTurn + policy.duration > this.turn;
+    });
+  }
+
+  private estimatedImmigrationDelta(country: Country): number {
+    const neighbours = new Set<number>();
+    for (const region of this.strategicRegions) {
+      if (region.ownerId === country.id) {
+        for (const neighbourId of region.neighbours) neighbours.add(neighbourId);
+      }
+    }
+    let delta = 0;
+    const formerColonies = new Set(["DZA", "MAR", "TUN", "LBN", "SYR", "IRN", "IND", "PAK", "BGD", "IDN", "NGA", "EGY"]);
+    for (const neighbourId of neighbours) {
+      const neighbour = this.countries[neighbourId];
+      if (!neighbour) continue;
+      const neighbourState = this.countryCapabilityStates[neighbourId];
+      if (!neighbourState) continue;
+      if (neighbourState.components.population > 50 && neighbourState.components.technology < 40) delta += 0.0003;
+      if (formerColonies.has(neighbour.iso3 ?? "")) delta += 0.0005;
+      if (neighbourState.components.stability < 30) delta += 0.0002;
+    }
+    return Math.max(0, Math.min(delta, 0.004));
+  }
+
   private advanceCapabilityStates() {
     if (this.gameMode !== "strategy" || this.turn <= 0) return;
     const states = this.countryCapabilityStates;
     if (!states.length) this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries);
+    this.advancePlayerPolicies();
+    const playerEffects = this.playerCountryId !== null ? getActivePlayerPolicyEffects(this.playerPolicyState, this.turn) : {};
     for (let index = 0; index < this.countries.length; index++) {
       const state = this.countryCapabilityStates[index];
       if (!state || state.lastEvaluatedTurn === this.turn) continue;
       const baseline = this.strategicBaseline(index);
       const context = this.activeCampaignContext(index);
-      this.countryCapabilityStates[index] = evaluateCapabilityChange(state, baseline, context, this.turn, this.seed);
+      const contextWithPolicy = {
+        ...context,
+        sanctionsPenalty: this.SANCTIONED_ISO3.has(this.countries[index].iso3 ?? "") ? 0.5 : 0,
+        immigrationDelta: this.estimatedImmigrationDelta(this.countries[index]),
+        warIntensity: context.hasIncoming ? 0.6 + Math.min(0.4, context.activeOccupations * 0.15) : context.hasOutgoing ? 0.3 : 0,
+        policyEffects: index === this.playerCountryId ? playerEffects : {},
+      };
+      this.countryCapabilityStates[index] = evaluateCapabilityChange(state, baseline, contextWithPolicy, this.turn, this.seed);
     }
   }
 
@@ -3086,6 +3168,10 @@ export class WorldEngine {
     this.defeats.fill(0);
     this.undoStack = [];
     this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries);
+    this.playerPolicyState.decisionPoints = 0;
+    this.playerPolicyState.lastDecisionTurn = 0;
+    this.playerPolicyState.activePolicies = [];
+    this.playerPolicyState.decisions = createPlayerPolicyDecisionDefaults();
     if (mode === "strategy") this.buildStrategicRegions();
     else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
     this.visualRevision++;
