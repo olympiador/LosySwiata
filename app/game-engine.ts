@@ -8,6 +8,7 @@ import { ADMIN1_DEFLATE_BASE64, ADMIN1_HEIGHT, ADMIN1_ISO, ADMIN1_NAMES, ADMIN1_
 import { ELEVATION_HEIGHT, ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH } from "./elevation-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
+import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, type CountryCapabilityState, type CapabilityDelta } from "./country-capability";
 
 export const MAP_W = 4320;
 export const MAP_H = 2160;
@@ -190,6 +191,7 @@ export type GameSnapshot = {
   runs: Array<[number, number]>;
   history: TurnRecord[];
   defeats?: number[];
+  countryCapabilityStates?: Array<{ components: StrategicComponents; uncertainty: number; change: StrategicComponents }>;
 };
 
 type CountryRow = {
@@ -620,6 +622,8 @@ export class WorldEngine {
   private strategicBaselineCache = new Map<number, StrategicComponents>();
   private strategicComponentCache = new Map<number, StrategicComponents>();
   private strategicPowerCache = new Map<number, number>();
+  private countryCapabilityStates: CountryCapabilityState[] = [];
+  private capabilityChangedThisTurn = false;
   private highlightOutlineKey = "";
   private highlightOutline: Path2D | null = null;
 
@@ -634,6 +638,7 @@ export class WorldEngine {
     this.rngState = this.seed;
     this.elevation = elevation;
     this.admin1At = admin1At;
+    this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(countries);
     for (let y = 0; y < MAP_H; y++) {
       const latitude = 90 - ((y + 0.5) / MAP_H) * 180;
       this.rowWeight[y] = Math.max(0.02, Math.cos(latitude * Math.PI / 180));
@@ -1443,6 +1448,34 @@ export class WorldEngine {
       ?? { power: 0, rating: 0, rank: 0, activeCountries: strengths.length, tier: "Słabe", components: { economy: 0, population: 0, technology: 0, logistics: 0, military: 0, stability: 0 }, exhaustion: this.strategicExhaustion[countryId] ?? 0, integration: 100 };
   }
 
+  getCountryCapabilityState(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    if (!state) return null;
+    return {
+      ...state,
+      strength: this.getStrategicStrength(countryId),
+    };
+  }
+
+  getCountryCapabilityChanges(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    if (!state) return [];
+    const componentKeys: Array<"economy" | "population" | "technology" | "logistics" | "military" | "stability"> = ["economy", "population", "technology", "logistics", "military", "stability"];
+    const labels = { economy: "Gospodarka", population: "Ludność", technology: "Technologia", logistics: "Logistyka", military: "Wojsko", stability: "Instytucje" } as const;
+    return componentKeys.map((key) => {
+      const value = state.components[key];
+      const delta = state.change[key];
+      const visible = Math.abs(delta) > 0.02;
+      return {
+        key,
+        label: labels[key],
+        value: Math.round(value),
+        delta: visible ? `${delta > 0.05 ? "+" : ""}${delta.toFixed(1)}` : "≈ 0",
+        trend: delta > 0.02 ? "up" : delta < -0.02 ? "down" : "flat",
+      };
+    });
+  }
+
   private frontStrength(attackerId: number, defenderId: number, regionId: number | null = null): StrategicFrontStrength {
     const attackPower = this.strategicPower(attackerId), defensePower = this.strategicPower(defenderId);
     const attackerFronts = Math.max(1, this.strategicCampaigns.filter(({ attackerId: id, defenderId: enemy }) => id === attackerId || enemy === attackerId).length);
@@ -1665,6 +1698,7 @@ export class WorldEngine {
       if (ownerId === campaign.defenderId) return true;
       return campaign.attackerId === this.playerCountryId && ownerId !== campaign.attackerId;
     });
+    this.advanceCapabilityStates();
     if (this.playerCountryId !== null) {
       const incoming = this.strategicCampaigns.filter(({ defenderId, regionId }) => defenderId === this.playerCountryId && this.strategicRegions[regionId]?.ownerId === this.playerCountryId);
       if (!incoming.length) {
@@ -1676,6 +1710,29 @@ export class WorldEngine {
     }
     this.history = [...this.history, ...records].slice(-120);
     return { records, changedIndices };
+  }
+
+  private activeCampaignContext(countryId: number) {
+    let outgoing = 0, incoming = 0, activeOccupations = 0;
+    for (const campaign of this.strategicCampaigns) {
+      if (campaign.attackerId === countryId) outgoing++;
+      if (campaign.defenderId === countryId) incoming++;
+    }
+    for (const occupation of this.strategicOccupations) if (occupation.ownerId === countryId && occupation.progress < 100) activeOccupations++;
+    return { hasOutgoing: outgoing > 0, hasIncoming: incoming > 0, activeOccupations, areaShare: 1 };
+  }
+
+  private advanceCapabilityStates() {
+    if (this.gameMode !== "strategy" || this.turn <= 0) return;
+    const states = this.countryCapabilityStates;
+    if (!states.length) this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries);
+    for (let index = 0; index < this.countries.length; index++) {
+      const state = this.countryCapabilityStates[index];
+      if (!state || state.lastEvaluatedTurn === this.turn) continue;
+      const baseline = this.strategicBaseline(index);
+      const context = this.activeCampaignContext(index);
+      this.countryCapabilityStates[index] = evaluateCapabilityChange(state, baseline, context, this.turn, this.seed);
+    }
   }
 
   private isWarTargetPlayable(id: number, index: number) {
@@ -2945,6 +3002,7 @@ export class WorldEngine {
     this.history = [];
     this.defeats.fill(0);
     this.undoStack = [];
+    this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries);
     if (mode === "strategy") this.buildStrategicRegions();
     else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
     this.visualRevision++;
@@ -2985,6 +3043,7 @@ export class WorldEngine {
       runs: this.runsCache.map(([owner, count]) => [owner, count]),
       history: this.history.map((record) => ({ ...record })),
       defeats: [...this.defeats],
+      countryCapabilityStates: capabilityStateToSnapshotArray(this.countryCapabilityStates),
     };
   }
 
@@ -3080,6 +3139,7 @@ export class WorldEngine {
     this.history = nextHistory; this.undoStack = [];
     this.defeats = snapshot.defeats ? [...snapshot.defeats] : this.countries.map(({ id }) => nextHistory.filter((record) => record.countryId === id && record.eliminated).length);
     this.directionTargetCache.clear();
+    this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, snapshot.countryCapabilityStates);
     this.visualRevision++;
   }
 
