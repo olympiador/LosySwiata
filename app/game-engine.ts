@@ -8,8 +8,8 @@ import { ADMIN1_DEFLATE_BASE64, ADMIN1_HEIGHT, ADMIN1_ISO, ADMIN1_NAMES, ADMIN1_
 import { ELEVATION_HEIGHT, ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH } from "./elevation-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
-import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy } from "./country-capability";
-export type { PolicyDecisionId, PlayerPolicyDecision, PlayerPolicyState, BorderPolicy };
+import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
+export type { PolicyDecisionId, PlayerPolicyDecision, PlayerPolicyState, BorderPolicy, RegionLogistics };
 
 export const MAP_W = 4320;
 export const MAP_H = 2160;
@@ -49,6 +49,12 @@ export type StrategicRegion = {
   neighbours: number[];
   provinceCount: number;
   provinceNames: string[];
+  logisticsIndex: number;
+  maritimeAccess: number;
+  railDensity: number;
+  roadDensity: number;
+  airportCount: number;
+  riverAccess: number;
 };
 
 export type StrategicCampaign = {
@@ -930,7 +936,7 @@ export class WorldEngine {
       if (known !== undefined) return known;
       const id = regions.length;
       byKey.set(key, id);
-      regions.push({ id, name, originalOwnerId, ownerId: originalOwnerId, cells: 0, areaKm2: 0, cx: 0, cy: 0, neighbours: [], provinceCount: 1, provinceNames: name ? [name] : [] });
+      regions.push({ id, name, originalOwnerId, ownerId: originalOwnerId, cells: 0, areaKm2: 0, cx: 0, cy: 0, neighbours: [], provinceCount: 1, provinceNames: name ? [name] : [], logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, riverAccess: 0 });
       runs.push([]); neighbourSets.push(new Set()); sumsX.push(0); sumsY.push(0); weights.push(0);
       return id;
     };
@@ -1134,6 +1140,7 @@ export class WorldEngine {
           ownerId: largest.originalOwnerId, cells: cluster.cells, areaKm2: cluster.area,
           cx: cluster.weightedX / Math.max(1, cluster.area), cy: cluster.weightedY / Math.max(1, cluster.area), neighbours: [],
           provinceCount: members.length, provinceNames: names,
+          logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, riverAccess: 0,
         };
       });
       const sectorAt = new Int32Array(provinceAt.length); sectorAt.fill(-1);
@@ -1826,6 +1833,8 @@ export class WorldEngine {
       activeOccupations,
       areaShare: 1,
       foreignBasePressure: this.foreignBasePressure(countryId),
+      regions: this.strategicRegions,
+      countryId,
     };
   }
 

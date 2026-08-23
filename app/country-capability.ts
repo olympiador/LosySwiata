@@ -1,4 +1,4 @@
-import type { Country, StrategicComponents } from "./game-engine";
+import type { Country, StrategicComponents, StrategicRegion } from "./game-engine";
 
 export type RegimeType = "democracy" | "authoritarian" | "totalitarian";
 export type AgeGroup = "children" | "youth" | "primeAge" | "middleAge" | "elderly" | "veryOld";
@@ -227,6 +227,40 @@ export function refugeeStabilityEffect(refugeeShare: number): number {
   return Math.min(0.08, 0.02 + refugeeShare * 0.12);
 }
 
+export type RegionLogistics = {
+  logisticsIndex: number;
+  maritimeAccess: number;
+  railDensity: number;
+  roadDensity: number;
+  airportCount: number;
+  riverAccess: number;
+};
+
+export function evaluateRegionLogistics(region: StrategicRegion): RegionLogistics {
+  const maritime = region.maritimeAccess;
+  const rail = region.railDensity * 100;
+  const road = region.roadDensity * 100;
+  const airport = Math.min(100, region.airportCount * 25);
+  const river = region.riverAccess * 100;
+  const logisticsIndex = clamp(
+    maritime * 0.30 +
+    rail * 0.25 +
+    road * 0.25 +
+    airport * 0.15 +
+    river * 0.05,
+    0,
+    100
+  );
+  return { logisticsIndex, maritimeAccess: maritime, railDensity: rail, roadDensity: road, airportCount: region.airportCount, riverAccess: river };
+}
+
+export function getCountryLogisticsFromRegions(regions: StrategicRegion[], countryId: number): number {
+  const countryRegions = regions.filter((r) => r.ownerId === countryId);
+  if (countryRegions.length === 0) return 0;
+  const total = countryRegions.reduce((sum, r) => sum + evaluateRegionLogistics(r).logisticsIndex, 0);
+  return clamp(total / countryRegions.length, 0, 100);
+}
+
 function updateDemographics(state: CountryCapabilityState, context: { hasIncoming: boolean; hasOutgoing: boolean; warIntensity: number; technology: number; immigrationPolicy: BorderPolicy }): DemographicPyramid {
   const pyramid = { ...state.demographics };
   const birthRate = 0.005 - (context.technology / 100) * 0.003 + (context.immigrationPolicy === "mass" ? 0.001 : 0);
@@ -305,7 +339,7 @@ function computeImmigrationEffects(policy: BorderPolicy, components: StrategicCo
 
 const MANUAL_BASELINES: Record<string, {
   economy?: number;
-  population?: number;
+  populationAbsolute?: number;
   technology?: number;
   logistics?: number;
   military?: number;
@@ -314,17 +348,17 @@ const MANUAL_BASELINES: Record<string, {
   informationEnvironment?: { score: number; techComponent: number; mediaControl: number; servicesStrength: number };
   combatExperience?: number;
 }> = {
-  POL: { economy: 58, population: 65, technology: 68, logistics: 72, military: 45, stability: 53, regimeType: "democracy", informationEnvironment: { score: 48, techComponent: 68, mediaControl: 25, servicesStrength: 40 }, combatExperience: 5 },
-  ROU: { economy: 45, population: 48, technology: 55, logistics: 62, military: 24, stability: 55, regimeType: "democracy", informationEnvironment: { score: 42, techComponent: 55, mediaControl: 30, servicesStrength: 35 }, combatExperience: 4 },
-  UKR: { economy: 38, population: 60, technology: 48, logistics: 50, military: 32, stability: 38, regimeType: "democracy", informationEnvironment: { score: 38, techComponent: 48, mediaControl: 35, servicesStrength: 30 }, combatExperience: 12 },
-  BLR: { economy: 16, population: 28, technology: 38, logistics: 40, military: 13, stability: 42, regimeType: "authoritarian", informationEnvironment: { score: 66, techComponent: 38, mediaControl: 80, servicesStrength: 75 }, combatExperience: 0 },
-  RUS: { economy: 72, population: 85, technology: 65, logistics: 55, military: 85, stability: 48, regimeType: "authoritarian", informationEnvironment: { score: 76, techComponent: 65, mediaControl: 85, servicesStrength: 80 }, combatExperience: 18 },
-  DEU: { economy: 85, population: 83, technology: 90, logistics: 88, military: 50, stability: 74, regimeType: "democracy", informationEnvironment: { score: 45, techComponent: 90, mediaControl: 20, servicesStrength: 35 }, combatExperience: 2 },
-  FRA: { economy: 78, population: 67, technology: 82, logistics: 80, military: 55, stability: 65, regimeType: "democracy", informationEnvironment: { score: 47, techComponent: 82, mediaControl: 22, servicesStrength: 38 }, combatExperience: 3 },
-  GBR: { economy: 75, population: 67, technology: 80, logistics: 78, military: 58, stability: 70, regimeType: "democracy", informationEnvironment: { score: 46, techComponent: 80, mediaControl: 21, servicesStrength: 37 }, combatExperience: 3 },
-  USA: { economy: 95, population: 82, technology: 95, logistics: 85, military: 95, stability: 68, regimeType: "democracy", informationEnvironment: { score: 50, techComponent: 95, mediaControl: 18, servicesStrength: 32 }, combatExperience: 8 },
-  TUR: { economy: 52, population: 84, technology: 55, logistics: 58, military: 40, stability: 50, regimeType: "authoritarian", informationEnvironment: { score: 58, techComponent: 55, mediaControl: 55, servicesStrength: 52 }, combatExperience: 6 },
-  PRK: { economy: 10, population: 25, technology: 25, logistics: 20, military: 35, stability: 88, regimeType: "totalitarian", informationEnvironment: { score: 82, techComponent: 25, mediaControl: 95, servicesStrength: 90 }, combatExperience: 5 },
+  POL: { economy: 58, populationAbsolute: 38, technology: 68, logistics: 72, military: 45, stability: 53, regimeType: "democracy", informationEnvironment: { score: 48, techComponent: 68, mediaControl: 25, servicesStrength: 40 }, combatExperience: 5 },
+  ROU: { economy: 45, populationAbsolute: 19, technology: 55, logistics: 62, military: 24, stability: 55, regimeType: "democracy", informationEnvironment: { score: 42, techComponent: 55, mediaControl: 30, servicesStrength: 35 }, combatExperience: 4 },
+  UKR: { economy: 38, populationAbsolute: 44, technology: 48, logistics: 50, military: 32, stability: 38, regimeType: "democracy", informationEnvironment: { score: 38, techComponent: 48, mediaControl: 35, servicesStrength: 30 }, combatExperience: 12 },
+  BLR: { economy: 16, populationAbsolute: 9, technology: 38, logistics: 40, military: 13, stability: 42, regimeType: "authoritarian", informationEnvironment: { score: 66, techComponent: 38, mediaControl: 80, servicesStrength: 75 }, combatExperience: 0 },
+  RUS: { economy: 72, populationAbsolute: 144, technology: 65, logistics: 55, military: 85, stability: 48, regimeType: "authoritarian", informationEnvironment: { score: 76, techComponent: 65, mediaControl: 85, servicesStrength: 80 }, combatExperience: 18 },
+  DEU: { economy: 85, populationAbsolute: 83, technology: 90, logistics: 88, military: 50, stability: 74, regimeType: "democracy", informationEnvironment: { score: 45, techComponent: 90, mediaControl: 20, servicesStrength: 35 }, combatExperience: 2 },
+  FRA: { economy: 78, populationAbsolute: 67, technology: 82, logistics: 80, military: 55, stability: 65, regimeType: "democracy", informationEnvironment: { score: 47, techComponent: 82, mediaControl: 22, servicesStrength: 38 }, combatExperience: 3 },
+  GBR: { economy: 75, populationAbsolute: 67, technology: 80, logistics: 78, military: 58, stability: 70, regimeType: "democracy", informationEnvironment: { score: 46, techComponent: 80, mediaControl: 21, servicesStrength: 37 }, combatExperience: 3 },
+  USA: { economy: 95, populationAbsolute: 331, technology: 95, logistics: 85, military: 95, stability: 68, regimeType: "democracy", informationEnvironment: { score: 50, techComponent: 95, mediaControl: 18, servicesStrength: 32 }, combatExperience: 8 },
+  TUR: { economy: 52, populationAbsolute: 84, technology: 55, logistics: 58, military: 40, stability: 50, regimeType: "authoritarian", informationEnvironment: { score: 58, techComponent: 55, mediaControl: 55, servicesStrength: 52 }, combatExperience: 6 },
+  PRK: { economy: 10, populationAbsolute: 25, technology: 25, logistics: 20, military: 35, stability: 88, regimeType: "totalitarian", informationEnvironment: { score: 82, techComponent: 25, mediaControl: 95, servicesStrength: 90 }, combatExperience: 5 },
 };
 
 export function initialCapabilityStates(countries: Country[]): CountryCapabilityState[] {
@@ -341,7 +375,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
     const components = calibrated
       ? {
           economy: clamp(calibrated.economy ?? fallback.economy),
-          population: clamp(calibrated.population ?? fallback.population),
+          population: clamp((calibrated.populationAbsolute ?? 0) / 1_000_000),
           technology: clamp(calibrated.technology ?? fallback.technology),
           logistics: clamp(calibrated.logistics ?? fallback.logistics),
           military: clamp(calibrated.military ?? fallback.military),
@@ -350,7 +384,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       : { ...fallback, stability: clamp(fallback.stability) };
     const regimeType = calibrated?.regimeType ?? initialRegimeType(country.id);
     const informationEnvironment = calibrated?.informationEnvironment ?? initialInformationEnvironment(country.id);
-    const populationAbsolute = components.population * 12_000_000;
+    const populationAbsolute = calibrated?.populationAbsolute ?? components.population * 1_000_000;
     const demographics = defaultPyramid();
     const culturalProximity = defaultProximity();
     return {
@@ -394,6 +428,8 @@ export function evaluateCapabilityChange(
     immigrationDelta?: number;
     warIntensity?: number;
     policyEffects?: any;
+    regions?: StrategicRegion[];
+    countryId?: number;
   },
   turn: number,
   seed: number,
@@ -415,11 +451,12 @@ export function evaluateCapabilityChange(
   const type = demographicType({ demographics });
   const consumption = consumptionDrive({ demographics });
   const cliff = demographicCliff(demographics);
+  const countryLogistics = context.countryId !== undefined && context.regions ? getCountryLogisticsFromRegions(context.regions, context.countryId) : baseline.logistics;
   const change: StrategicComponents = {
     economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty),
     population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty),
     technology: clamp((baseline.technology - state.components.technology) * 0.03 + (context.hasOutgoing ? -0.08 : 0.03) - sanctionsPenalty * 0.05),
-    logistics: clamp((baseline.logistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0)),
+    logistics: clamp((countryLogistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0)),
     military: clamp((baseline.military - state.components.military) * 0.06 + (context.hasOutgoing ? 0.3 : -0.05) + (context.hasIncoming ? 0.1 : 0) + cliff.manpowerPenalty * 0.5),
     stability: clamp((baseline.stability - state.components.stability) * 0.03 + (context.hasIncoming ? -0.3 : 0.05) + occupationLoad * 0.5 + warIntensity * -0.05 + cliff.stabilityPenalty + (state.assimilationProgress < 30 ? -0.01 : 0)),
   };
