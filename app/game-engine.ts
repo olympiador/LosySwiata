@@ -1437,6 +1437,10 @@ export class WorldEngine {
   getCountryLogisticsFromRegions(countryId: number) {
     return getCountryLogisticsFromRegions(this.strategicRegions, countryId);
   }
+  getCountryLogisticsInvestments(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    return state?.logisticsInvestments ?? [];
+  }
 
   getRegionLogistics(regionId: number) {
     const region = this.strategicRegions[regionId];
@@ -2047,7 +2051,9 @@ export class WorldEngine {
     const states = this.countryCapabilityStates;
     if (!states.length) this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, undefined);
     this.advancePlayerPolicies();
-    const playerEffects = this.playerCountryId !== null ? getActivePlayerPolicyEffects(this.playerPolicyState) : {};
+    const playerEffects = getActivePlayerPolicyEffects(this.playerPolicyState);
+    const playerInvestments = this.playerCountryId !== null ? this.getCountryLogisticsInvestments(this.playerCountryId) : [];
+    const logisticsBonus = playerInvestments.reduce((sum, inv) => sum + inv.bonus, 0);
     for (let index = 0; index < this.countries.length; index++) {
       const state = this.countryCapabilityStates[index];
       if (!state || state.lastEvaluatedTurn === this.turn) continue;
@@ -2058,7 +2064,7 @@ export class WorldEngine {
         sanctionsPenalty: this.SANCTIONED_ISO3.has(this.countries[index].iso3 ?? "") ? 0.5 : 0,
         immigrationDelta: this.estimatedImmigrationDelta(this.countries[index]),
         warIntensity: context.hasIncoming ? 0.6 + Math.min(0.4, context.activeOccupations * 0.15) : context.hasOutgoing ? 0.3 : 0,
-        policyEffects: index === this.playerCountryId ? playerEffects : {},
+        policyEffects: index === this.playerCountryId ? { ...playerEffects, logisticsBonus } : {},
       };
       this.countryCapabilityStates[index] = evaluateCapabilityChange(state, baseline, contextWithPolicy, this.turn, this.seed);
     }
