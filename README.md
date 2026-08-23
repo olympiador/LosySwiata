@@ -4,6 +4,60 @@ Strategiczna gra przeglądarkowa o państwach, granicach i długofalowych konsek
 
 Najważniejszy dokument projektowy: [docs/ROADMAP_STRATEGICZNA.md](docs/ROADMAP_STRATEGICZNA.md).
 
+## Model zdolności państwowej
+
+Państwo nie ma jednej liczby „siły”. Ma profil 6 wymiarów ocenianych w skali 0–100:
+
+- gospodarka
+- populacja
+- technologia
+- logistyka
+- wojsko
+- stabilność
+
+Dodatkowo liczone są środowisko informacyjne i doświadczenie bojowe.
+Wszystkie zmiany są deterministyczne: każda wartość zmienia się tylko z przyczyny, np. wojna, polityka gracza, okupacja, kontekst tury.
+
+### Stabilność
+- Demokracje: społeczna stabilność = 50% WGI 2021 + 25% Freedom House 2021 + 25% CPI 2021.
+- Autorytaryzmy/totalitaryzmy: stabilność reżimowa = 40% represje + 30% brak opozycji + 30% kontrola mediów.
+- Modyfikator reżimu: demokracja -15%, autorytaryzm 0%, totalitaryzm +15%.
+- Środowisko informacyjne modyfikuje stabilność: -10 dla demokracji z score >60, +5/+8 dla autorytaryzmów/totalitaryzmów z score >70/75.
+- Obce bazy przy granicy: -8%/kwartał Ukraina, -5% Rosja, -3% Białoruś.
+- Terytorialne zyski: +5 stabilności przez 8 kwartałów, 50% zanik co 2 kwartały po wygaśnięciu.
+
+### Logistyka
+- Obrażenia zależne od intensywności wojny, technologii i wielkości terytorium.
+- Odbudowa zależna od gospodarki i logistyki.
+- Okupacje obciążają logistykę o 10% każda.
+
+### Populacja i technologia
+- Wyższa technologia zmniejsza przyrost naturalny: model przejścia demograficznego.
+- Polityka imigracyjna może compensować spadek: 4 poziomy od zamkniętych granic do masowej imigracji.
+
+### Demografia
+- Model Zeihana: 6 grup wiekowych.
+- Typy piramid: zdrowa, kominek, odwrócona.
+- Konsumpcja napędzana przez wiek: primeAge/youth podnoszą gospodarkę, elderly/veryOld obniżają.
+- Bliskość kulturowa wpływa na asymilację zdobyczy.
+- Uchodźcy wojenni zmieniają strukturę wiekową kraju atakowanego i przyjmującego.
+
+### Manpower i mobilizacja
+- 3 stany: ukryta, jawna, pełna.
+- Koszt utrzymania zależny od wielkości armii i frontów.
+- Gracz decyduje o mobilizacji jako akcie politycznym.
+
+### Akty polityczne
+- Gracz ma 2 punkty decyzyjne na turę.
+- Akty to karty z efektem, kosztem utrzymania, cooldownem i warunkami.
+- Przykłady: nadzór mediów, program R&D, pełna mobilizacja, otwarte/zamknięte granice, ofensywa propagandowa, presja dyplomatyczna.
+- Nie ma suwaków: każda decyzja to jednorazowy akt z konsekwencjami.
+
+## Uruchomienie lokalne
+- Dane bazowe z 2021 roku, przed pełnoskalową wojną w Ukrainie.
+- Ręczna kalibracja dla 11 krajów scenariusza, reszta z automatycznych wskaźników z seedów.
+- Wszystkie źródła są weryfikowalne: World Bank, SIPRI, WIPO GII, Freedom House, Transparency International, IISS.
+
 ## Uruchomienie lokalne
 
 Wymagany jest Node.js 22.13 lub nowszy.
