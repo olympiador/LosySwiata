@@ -35,7 +35,7 @@ export type CountryCapabilityState = {
   populationAbsolute: number;
 };
 
-export type PolicyDecisionId = "media-oversight" | "research-program" | "full-mobilization" | "open-borders" | "close-borders" | "propaganda-offensive" | "diplomatic-pressure" | "selective-immigration" | "mass-immigration-former-colonies";
+export type PolicyDecisionId = "media-oversight" | "research-program" | "full-mobilization" | "open-borders" | "close-borders" | "propaganda-offensive" | "diplomatic-pressure" | "selective-immigration" | "mass-immigration-former-colonies" | "build-port" | "modernize-roads" | "expand-airport" | "rail-upgrade";
 
 export type PlayerPolicyDecision = {
   id: PolicyDecisionId;
@@ -228,6 +228,7 @@ export function refugeeStabilityEffect(refugeeShare: number): number {
 }
 
 export type RegionLogistics = {
+  regionId: number;
   logisticsIndex: number;
   maritimeAccess: number;
   railDensity: number;
@@ -251,7 +252,7 @@ export function evaluateRegionLogistics(region: StrategicRegion): RegionLogistic
     0,
     100
   );
-  return { logisticsIndex, maritimeAccess: maritime, railDensity: rail, roadDensity: road, airportCount: region.airportCount, riverAccess: river };
+  return { regionId: region.id, logisticsIndex, maritimeAccess: maritime, railDensity: rail, roadDensity: road, airportCount: region.airportCount, riverAccess: river };
 }
 
 export function getCountryLogisticsFromRegions(regions: StrategicRegion[], countryId: number): number {
@@ -636,7 +637,55 @@ export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, P
       duration: 12,
       cooldown: 20,
       lastUsedTurn: -20,
-      condition: (state) => false,
+      condition: (state: CountryCapabilityState) => false,
+    },
+    "build-port": {
+      id: "build-port",
+      name: "Budowa portu",
+      description: "Nowy port w regionie przybrzeżnym. Podnosi logistykę o +20.",
+      cost: 2,
+      effects: {},
+      costs: { economyDelta: -5 },
+      duration: 8,
+      cooldown: 20,
+      lastUsedTurn: -20,
+      condition: (state: CountryCapabilityState) => false,
+    },
+    "modernize-roads": {
+      id: "modernize-roads",
+      name: "Modernizacja dróg",
+      description: "Ulepszenie sieci drogowej. Podnosi logistykę o +10.",
+      cost: 1,
+      effects: {},
+      costs: { economyDelta: -3 },
+      duration: 4,
+      cooldown: 12,
+      lastUsedTurn: -20,
+      condition: (state: CountryCapabilityState) => false,
+    },
+    "expand-airport": {
+      id: "expand-airport",
+      name: "Rozbudowa lotniska",
+      description: "Nowe lotnisko w regionie. Podnosi logistykę o +12.",
+      cost: 1,
+      effects: {},
+      costs: { economyDelta: -4 },
+      duration: 6,
+      cooldown: 14,
+      lastUsedTurn: -20,
+      condition: (state: CountryCapabilityState) => false,
+    },
+    "rail-upgrade": {
+      id: "rail-upgrade",
+      name: "Modernizacja kolei",
+      description: "Ulepszenie infrastruktury kolejowej. Podnosi logistykę o +15.",
+      cost: 1,
+      effects: {},
+      costs: { economyDelta: -4 },
+      duration: 6,
+      cooldown: 14,
+      lastUsedTurn: -20,
+      condition: (state: CountryCapabilityState) => false,
     },
   };
 }

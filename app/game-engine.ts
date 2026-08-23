@@ -57,6 +57,13 @@ export type StrategicRegion = {
   riverAccess: number;
 };
 
+export type LogisticsInvestment = {
+  regionId: number;
+  type: "port" | "road" | "rail" | "airport";
+  startedTurn: number;
+  duration: number;
+};
+
 export type StrategicCampaign = {
   id: number;
   attackerId: number;
@@ -621,6 +628,7 @@ export class WorldEngine {
   private strategicCampaigns: StrategicCampaign[] = [];
   private strategicTerritoryLog: StrategicTerritoryEvent[] = [];
   private strategicOccupations: StrategicOccupation[] = [];
+  private strategicLogisticsInvestments: LogisticsInvestment[] = [];
   private strategicExhaustion: number[] = [];
   private strategicDefenseState: StrategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 };
   private nextCampaignId = 1;
@@ -1291,12 +1299,49 @@ export class WorldEngine {
     this.strategicAdministrativeBorders = null;
     this.strategicComponentCache.clear();
     this.strategicPowerCache.clear();
+    this.computeRegionLogisticsFromMap();
+  }
+
+  private computeRegionLogisticsFromMap() {
+    if (!this.strategicRegions.length) return;
+    const coast = new Set<number>();
+    for (let y = 0; y < MAP_H; y++) {
+      for (let x = 0; x < MAP_W; x++) {
+        const index = y * MAP_W + x;
+        if (this.initialOwners[index] < 0) continue;
+        const neighbours = [
+          y > 0 ? index - MAP_W : -1,
+          y + 1 < MAP_H ? index + MAP_W : -1,
+          y * MAP_W + wrapX(x - 1),
+          y * MAP_W + wrapX(x + 1),
+        ];
+        if (neighbours.some((n) => n >= 0 && this.initialOwners[n] < 0)) coast.add(this.strategicProvinceAt[index]);
+      }
+    }
+    for (const region of this.strategicRegions) {
+      const isCoastal = coast.has(region.id);
+      const isLarge = region.areaKm2 > 20_000;
+      const hasCapital = region.cells > 800;
+      region.maritimeAccess = isCoastal ? 70 : 0;
+      region.railDensity = isLarge ? 0.7 : 0.35;
+      region.roadDensity = 0.5;
+      region.airportCount = hasCapital ? 1 : 0;
+      region.riverAccess = 0;
+      region.logisticsIndex = Math.max(0, Math.min(100,
+        region.maritimeAccess * 0.30 +
+        region.railDensity * 100 * 0.25 +
+        region.roadDensity * 100 * 0.25 +
+        (region.airportCount * 25) * 0.15 +
+        region.riverAccess * 100 * 0.05
+      ));
+    }
   }
 
   getStrategicRegions() { return this.strategicRegions.map((region) => ({ ...region, neighbours: [...region.neighbours] })); }
   getStrategicCampaigns() { return this.strategicCampaigns.map((campaign) => ({ ...campaign })); }
   getStrategicTerritoryLog() { return this.strategicTerritoryLog.map((event) => ({ ...event, provinceNames: [...event.provinceNames] })); }
   getStrategicOccupations() { return this.strategicOccupations.map((occupation) => ({ ...occupation })); }
+  getStrategicLogisticsInvestments() { return this.strategicLogisticsInvestments.map((item) => ({ ...item })); }
   getStrategicExhaustion(countryId: number) { return this.strategicExhaustion[countryId] ?? 0; }
   getPlayerDefenseState() {
     return {
@@ -1387,6 +1432,15 @@ export class WorldEngine {
   getCountryAssimilationProgress(countryId: number) {
     const state = this.countryCapabilityStates[countryId];
     return state?.assimilationProgress ?? 0;
+  }
+
+  getCountryLogisticsFromRegions(countryId: number) {
+    return getCountryLogisticsFromRegions(this.strategicRegions, countryId);
+  }
+
+  getRegionLogistics(regionId: number) {
+    const region = this.strategicRegions[regionId];
+    return region ? evaluateRegionLogistics(region) : null;
   }
 
   getRegimeLabel(regimeType: RegimeType) {
