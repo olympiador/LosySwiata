@@ -1333,15 +1333,53 @@ export class WorldEngine {
   }
 
   getCountryRegimeType(countryId: number) {
-    return this.countryCapabilityStates[countryId]?.regimeType ?? null;
+    const state = this.countryCapabilityStates[countryId];
+    return state?.regimeType ?? "democracy";
   }
 
   getCountryInformationEnvironment(countryId: number) {
-    return this.countryCapabilityStates[countryId]?.informationEnvironment ?? null;
+    const state = this.countryCapabilityStates[countryId];
+    return state?.informationEnvironment ?? { score: 45, techComponent: 50, mediaControl: 30, servicesStrength: 35 };
   }
 
   getCountryCombatExperience(countryId: number) {
-    return this.countryCapabilityStates[countryId]?.combatExperience ?? 0;
+    const state = this.countryCapabilityStates[countryId];
+    return state?.combatExperience ?? 0;
+  }
+
+  getCountryDemographics(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    return state?.demographics ?? { children: 0.18, youth: 0.12, primeAge: 0.34, middleAge: 0.22, elderly: 0.11, veryOld: 0.03 };
+  }
+
+  getCountryDemographicType(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    return state?.demographicType ?? "chimney";
+  }
+
+  getCountryPopulationAbsolute(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    return state?.populationAbsolute ?? 0;
+  }
+
+  getCountryRefugeesHosted(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    return state?.refugeesHosted ?? 0;
+  }
+
+  getCountryBorderPolicy(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    return state?.borderPolicy ?? "selective";
+  }
+
+  getCountryCulturalProximity(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    return state?.culturalProximity ?? {};
+  }
+
+  getCountryAssimilationProgress(countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    return state?.assimilationProgress ?? 0;
   }
 
   getRegimeLabel(regimeType: RegimeType) {
@@ -1354,6 +1392,10 @@ export class WorldEngine {
     if (score >= 50) return "Częściowa kontrola";
     if (score >= 35) return "Ograniczona kontrola";
     return "Wolne media";
+  }
+
+  getDemographicLabel(type: "healthy" | "chimney" | "inverted") {
+    return type === "healthy" ? "Zdrowa piramida" : type === "inverted" ? "Odwrócona piramida" : "Kominek";
   }
   getMapRevision() { return this.visualRevision; }
   getPlayerDefensePolicy() {
