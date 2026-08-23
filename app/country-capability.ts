@@ -181,6 +181,16 @@ export function consumptionDrive(state: Pick<CountryCapabilityState, "demographi
   );
 }
 
+export function demographicCliff(demographics: DemographicPyramid): { economyPenalty: number; populationPenalty: number; stabilityPenalty: number; manpowerPenalty: number } {
+  const elderly = demographics.elderly ?? 0;
+  const veryOld = demographics.veryOld ?? 0;
+  const children = demographics.children ?? 0;
+  if (elderly + veryOld > 0.35 && children < 0.15) {
+    return { economyPenalty: -0.06, populationPenalty: -0.03, stabilityPenalty: -0.02, manpowerPenalty: -0.03 };
+  }
+  return { economyPenalty: 0, populationPenalty: 0, stabilityPenalty: 0, manpowerPenalty: 0 };
+}
+
 export function availableWorkingAgeShare(state: Pick<CountryCapabilityState, "demographics">): number {
   return (
     (state.demographics.youth ?? 0) * 0.5 +
@@ -261,13 +271,13 @@ function computeImmigrationEffects(policy: BorderPolicy, components: StrategicCo
   const pop = components.population;
   switch (policy) {
     case "closed":
-      return { populationDelta: 0, stabilityDelta: regimeType === "democracy" ? -2 : 2, infoEnvDelta: 0, mediaControlDelta: 0 };
+      return { populationDelta: 0, stabilityDelta: regimeType === "democracy" ? -2 : 2, infoEnvDelta: 0, mediaControlDelta: 0, economyDelta: 0, logisticsDelta: 0 };
     case "selective":
-      return { populationDelta: pop * 0.0005, stabilityDelta: -1, infoEnvDelta: 0, mediaControlDelta: 0 };
+      return { populationDelta: pop * 0.0005, stabilityDelta: -1, infoEnvDelta: 0, mediaControlDelta: 0, economyDelta: 0, logisticsDelta: 0 };
     case "open":
-      return { populationDelta: pop * 0.0015, stabilityDelta: -3, infoEnvDelta: 0, mediaControlDelta: 0 };
+      return { populationDelta: pop * 0.0015, stabilityDelta: -3, infoEnvDelta: 0, mediaControlDelta: 0, economyDelta: -0.01, logisticsDelta: -0.01 };
     case "mass":
-      return { populationDelta: pop * 0.003, stabilityDelta: -6, infoEnvDelta: 0, mediaControlDelta: 0 };
+      return { populationDelta: pop * 0.003, stabilityDelta: -6, infoEnvDelta: 0, mediaControlDelta: 0, economyDelta: -0.03, logisticsDelta: -0.02 };
   }
 }
 
@@ -379,13 +389,17 @@ export function evaluateCapabilityChange(
   const recovery = state.components.economy * 0.03 + state.components.logistics * 0.05;
   const occupationPenalty = context.activeOccupations * 0.1;
   const postWarRecovery = (!context.hasIncoming && !context.hasOutgoing && context.activeOccupations === 0) ? 1 : 0;
+  const demographics = updateDemographics(state, { hasIncoming: context.hasIncoming, hasOutgoing: context.hasOutgoing, warIntensity, technology: state.components.technology, immigrationPolicy: state.borderPolicy });
+  const type = demographicType({ demographics });
+  const consumption = consumptionDrive({ demographics });
+  const cliff = demographicCliff(demographics);
   const change: StrategicComponents = {
-    economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0)),
-    population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03),
+    economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty),
+    population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty),
     technology: clamp((baseline.technology - state.components.technology) * 0.03 + (context.hasOutgoing ? -0.08 : 0.03) - sanctionsPenalty * 0.05),
-    logistics: clamp((baseline.logistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3),
-    military: clamp((baseline.military - state.components.military) * 0.06 + (context.hasOutgoing ? 0.3 : -0.05) + (context.hasIncoming ? 0.1 : 0)),
-    stability: clamp((baseline.stability - state.components.stability) * 0.03 + (context.hasIncoming ? -0.3 : 0.05) + occupationLoad * 0.5 + warIntensity * -0.05),
+    logistics: clamp((baseline.logistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0)),
+    military: clamp((baseline.military - state.components.military) * 0.06 + (context.hasOutgoing ? 0.3 : -0.05) + (context.hasIncoming ? 0.1 : 0) + cliff.manpowerPenalty * 0.5),
+    stability: clamp((baseline.stability - state.components.stability) * 0.03 + (context.hasIncoming ? -0.3 : 0.05) + occupationLoad * 0.5 + warIntensity * -0.05 + cliff.stabilityPenalty + (state.assimilationProgress < 30 ? -0.01 : 0)),
   };
   const regimeType = context.regimeOverride ?? state.regimeType;
   const regimeMod = regimeModifier(regimeType);
@@ -400,7 +414,7 @@ export function evaluateCapabilityChange(
   const informationEnvironment = {
     score: clamp(infoEnv.score + (policy.informationEnvironment?.techComponent ?? 0) * 0.1 + (policy.informationEnvironment?.servicesStrength ?? 0) * 0.3),
     techComponent: infoEnv.techComponent,
-    mediaControl: clamp(infoEnv.mediaControl + (policy.informationEnvironment?.mediaControl ?? 0) + immigrationEffects.mediaControlDelta),
+    mediaControl: clamp(infoEnv.mediaControl + (policy.informationEnvironment?.mediaControl ?? 0) + (immigrationEffects.mediaControlDelta ?? 0)),
     servicesStrength: clamp(infoEnv.servicesStrength + (policy.informationEnvironment?.servicesStrength ?? 0)),
   };
   const population = state.components.population + change.population + immigrationEffects.populationDelta;
@@ -411,12 +425,14 @@ export function evaluateCapabilityChange(
   const mobilizationMultiplier = mobilization === "full" ? 1.35 : mobilization === "open" ? 1.18 : 1;
   const frontCount = context.hasOutgoing ? 1 : 0;
   const maintenanceCost = Math.round((military * 0.08 + frontCount * 6 + (mobilization === "full" ? 14 : mobilization === "open" ? 7 : 0)) * 10) / 10;
+  const refugeeFlow = refugeeFlowFrom(warIntensity, immigrationPolicy);
+  const populationScale = state.populationAbsolute > 0 ? state.populationAbsolute : (state.components.population * 12_000_000);
   const updated = {
     components: {
-      economy: clamp(state.components.economy + change.economy),
+      economy: clamp(state.components.economy + change.economy + (immigrationEffects.economyDelta ?? 0)),
       population: clamp(population, 0, 100),
       technology: clamp(state.components.technology + change.technology + (policy.technologyBurst ?? 0)),
-      logistics: clamp(state.components.logistics + change.logistics),
+      logistics: clamp(state.components.logistics + change.logistics + (immigrationEffects.logisticsDelta ?? 0)),
       military: clamp(military),
       stability: stabilityFinal,
     },
@@ -437,13 +453,13 @@ export function evaluateCapabilityChange(
       mobilization,
       maintenanceCost,
     },
-    demographics: updateDemographics(state, { hasIncoming: context.hasIncoming, hasOutgoing: context.hasOutgoing, warIntensity, technology: state.components.technology, immigrationPolicy }),
-    demographicType: demographicType({ demographics: updateDemographics(state, { hasIncoming: context.hasIncoming, hasOutgoing: context.hasOutgoing, warIntensity, technology: state.components.technology, immigrationPolicy }) }),
+    demographics,
+    demographicType: type,
     borderPolicy: immigrationPolicy,
     culturalProximity: state.culturalProximity,
-    assimilationProgress: clamp(state.assimilationProgress + (context.activeOccupations > 0 ? 0.05 : 0), 0, 100),
-    refugeesHosted: state.refugeesHosted,
-    populationAbsolute: state.populationAbsolute + (immigrationEffects.populationDelta * 12_000_000),
+    assimilationProgress: clamp(state.assimilationProgress + (context.activeOccupations > 0 ? assimilationRate(state.culturalProximity[context.activeOccupations] ?? 0.15, regimeType) * 100 : 0), 0, 100),
+    refugeesHosted: state.refugeesHosted + (populationScale > 0 ? populationScale * refugeeFlow * 0.3 : 0),
+    populationAbsolute: populationScale + (populationScale > 0 ? populationScale * refugeeFlow * 0.3 : 0) + (immigrationEffects.populationDelta * 12_000_000),
   };
   return updated;
 }
