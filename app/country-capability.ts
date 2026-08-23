@@ -254,10 +254,32 @@ function applyRefugeeFlow(state: CountryCapabilityState, flow: number): { state:
   if (flow <= 0) return { state, refugeesIn: 0 };
   const workingAge = availableWorkingAgeShare(state);
   const refugeesIn = Math.max(0, state.populationAbsolute * flow * workingAge);
-  const newPopulation = state.populationAbsolute + refugeesIn;
+  const split = {
+    workingAge: refugeesIn * 0.7,
+    children: refugeesIn * 0.2,
+    elderly: refugeesIn * 0.1,
+  };
+  const totalNew = split.workingAge + split.children + split.elderly;
   const updated = cloneCapabilityState(state);
-  updated.populationAbsolute = newPopulation;
-  updated.refugeesHosted += refugeesIn;
+  updated.populationAbsolute += totalNew;
+  updated.refugeesHosted += totalNew;
+  const demo = { ...updated.demographics };
+  const total = Object.values(demo).reduce((a, b) => a + (b ?? 0), 0);
+  if (total > 0) {
+    demo.primeAge = clamp(((demo.primeAge ?? 0) * total + split.workingAge) / (total + totalNew), 0.05, 0.6);
+    demo.children = clamp(((demo.children ?? 0) * total + split.children) / (total + totalNew), 0.05, 0.5);
+    demo.elderly = clamp(((demo.elderly ?? 0) * total + split.elderly) / (total + totalNew), 0.05, 0.5);
+    demo.youth = clamp(((demo.youth ?? 0) * total) / (total + totalNew), 0.05, 0.3);
+    demo.middleAge = clamp(((demo.middleAge ?? 0) * total) / (total + totalNew), 0.05, 0.4);
+    demo.veryOld = clamp(((demo.veryOld ?? 0) * total) / (total + totalNew), 0.01, 0.4);
+    const newTotal = Object.values(demo).reduce((a, b) => a + (b ?? 0), 0);
+    if (newTotal > 0) {
+      for (const key of Object.keys(demo) as AgeGroup[]) {
+        demo[key] = (demo[key] ?? 0) / newTotal;
+      }
+    }
+    updated.demographics = demo;
+  }
   return { state: updated, refugeesIn };
 }
 
@@ -427,14 +449,18 @@ export function evaluateCapabilityChange(
   const maintenanceCost = Math.round((military * 0.08 + frontCount * 6 + (mobilization === "full" ? 14 : mobilization === "open" ? 7 : 0)) * 10) / 10;
   const refugeeFlow = refugeeFlowFrom(warIntensity, immigrationPolicy);
   const populationScale = state.populationAbsolute > 0 ? state.populationAbsolute : (state.components.population * 12_000_000);
+  const { state: postRefugeeState, refugeesIn } = applyRefugeeFlow(state, populationScale > 0 ? refugeeFlow : 0);
+  const assimilationRateValue = assimilationRate(state.culturalProximity[context.activeOccupations] ?? 0.15, regimeType);
+  const postAssimilationState = applyAssimilation(postRefugeeState, context.activeOccupations > 0 ? assimilationRateValue : 0);
+  const assimilationBonus = postAssimilationState.assimilationProgress >= 100 ? { economyBonus: 5, logisticsBonus: 3, stabilityBonus: 2 } : { economyBonus: 0, logisticsBonus: 0, stabilityBonus: 0 };
   const updated = {
     components: {
-      economy: clamp(state.components.economy + change.economy + (immigrationEffects.economyDelta ?? 0)),
+      economy: clamp(state.components.economy + change.economy + (immigrationEffects.economyDelta ?? 0) + (postAssimilationState.assimilationProgress < 30 ? -0.02 : 0) + assimilationBonus.economyBonus),
       population: clamp(population, 0, 100),
       technology: clamp(state.components.technology + change.technology + (policy.technologyBurst ?? 0)),
-      logistics: clamp(state.components.logistics + change.logistics + (immigrationEffects.logisticsDelta ?? 0)),
+      logistics: clamp(state.components.logistics + change.logistics + (immigrationEffects.logisticsDelta ?? 0) + (postAssimilationState.assimilationProgress < 30 ? -0.02 : 0) + assimilationBonus.logisticsBonus),
       military: clamp(military),
-      stability: stabilityFinal,
+      stability: stabilityFinal + (postAssimilationState.assimilationProgress < 30 ? -0.02 : 0) + assimilationBonus.stabilityBonus,
     },
     uncertainty: clamp(state.uncertainty * 0.985 + 0.002 + (context.areaShare > 1.2 ? 0.015 : 0)),
     lastEvaluatedTurn: turn,
@@ -447,19 +473,19 @@ export function evaluateCapabilityChange(
     informationEnvironment,
     combatExperience: clamp(state.combatExperience + (policy.combatExperienceChange ?? 0)),
     manpower: {
-      available: Math.max(0, Math.round(population * 0.22 * mobilizationMultiplier)),
-      active: Math.min(activeManpower, Math.max(0, Math.round(population * 0.22 * mobilizationMultiplier))),
-      reserves: Math.max(0, reserves),
+      available: Math.max(0, Math.round((populationScale / 12_000_000) * 0.22 * mobilizationMultiplier)),
+      active: Math.min(activeManpower, Math.max(0, Math.round((populationScale / 12_000_000) * 0.22 * mobilizationMultiplier))),
+      reserves: Math.max(0, Math.round((populationScale / 12_000_000) * 0.12 - activeManpower)),
       mobilization,
       maintenanceCost,
     },
-    demographics,
-    demographicType: type,
+    demographics: postAssimilationState.demographics,
+    demographicType: demographicType({ demographics: postAssimilationState.demographics }),
     borderPolicy: immigrationPolicy,
     culturalProximity: state.culturalProximity,
-    assimilationProgress: clamp(state.assimilationProgress + (context.activeOccupations > 0 ? assimilationRate(state.culturalProximity[context.activeOccupations] ?? 0.15, regimeType) * 100 : 0), 0, 100),
-    refugeesHosted: state.refugeesHosted + (populationScale > 0 ? populationScale * refugeeFlow * 0.3 : 0),
-    populationAbsolute: populationScale + (populationScale > 0 ? populationScale * refugeeFlow * 0.3 : 0) + (immigrationEffects.populationDelta * 12_000_000),
+    assimilationProgress: postAssimilationState.assimilationProgress,
+    refugeesHosted: postRefugeeState.refugeesHosted + (populationScale > 0 ? populationScale * refugeeFlow * 0.3 : 0),
+    populationAbsolute: postRefugeeState.populationAbsolute + (immigrationEffects.populationDelta * 12_000_000),
   };
   return updated;
 }
