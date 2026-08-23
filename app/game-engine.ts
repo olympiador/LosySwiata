@@ -1982,6 +1982,7 @@ export class WorldEngine {
     const owned = this.strategicRegions.filter((r) => r.ownerId === countryId);
     const region = targetRegionId !== undefined ? owned.find((r) => r.id === targetRegionId) : owned.sort((a, b) => b.areaKm2 - a.areaKm2 || a.id - b.id)[0];
     if (!region) return;
+    if (policyId === "build-port" && region.maritimeAccess <= 0) return;
     let type: LogisticsInvestment["type"] | null = null;
     let bonus = 0;
     switch (policyId) {
