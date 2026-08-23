@@ -1933,6 +1933,7 @@ export class WorldEngine {
     this.playerPolicyState.decisions = { ...this.playerPolicyState.decisions, [policyId]: activated };
     this.strategicComponentCache.clear();
     this.strategicPowerCache.clear();
+    this.applyLogisticsPolicyEffect(policyId, this.playerCountryId);
     return true;
   }
 
@@ -1947,6 +1948,45 @@ export class WorldEngine {
       if (policy.condition && !policy.condition(state)) return false;
       return true;
     });
+  }
+
+  private applyLogisticsPolicyEffect(policyId: PolicyDecisionId, countryId: number) {
+    const state = this.countryCapabilityStates[countryId];
+    if (!state) return;
+    const region = this.strategicRegions
+      .filter((r) => r.ownerId === countryId)
+      .sort((a, b) => b.areaKm2 - a.areaKm2 || a.id - b.id)[0];
+    if (!region) return;
+    let type: LogisticsInvestment["type"] | null = null;
+    let bonus = 0;
+    switch (policyId) {
+      case "build-port":
+        if (region.maritimeAccess > 0) type = "port", bonus = 20;
+        break;
+      case "modernize-roads":
+        type = "road", bonus = 10;
+        break;
+      case "expand-airport":
+        type = "airport", bonus = 12;
+        break;
+      case "rail-upgrade":
+        type = "rail", bonus = 15;
+        break;
+      default:
+        return;
+    }
+    if (!type) return;
+    const policy = this.playerPolicyState.decisions[policyId];
+    state.logisticsInvestments = [
+      ...state.logisticsInvestments,
+      {
+        id: `${policyId}-${this.turn}-${region.id}`,
+        regionId: region.id,
+        type,
+        bonus,
+        remainingTurns: policy?.duration ?? 4,
+      },
+    ];
   }
 
   private advancePlayerPolicies() {

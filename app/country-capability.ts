@@ -33,6 +33,7 @@ export type CountryCapabilityState = {
   assimilationProgress: number;
   refugeesHosted: number;
   populationAbsolute: number;
+  logisticsInvestments: LogisticsInvestment[];
 };
 
 export type PolicyDecisionId = "media-oversight" | "research-program" | "full-mobilization" | "open-borders" | "close-borders" | "propaganda-offensive" | "diplomatic-pressure" | "selective-immigration" | "mass-immigration-former-colonies" | "build-port" | "modernize-roads" | "expand-airport" | "rail-upgrade";
@@ -124,6 +125,7 @@ function defaultInitialCountryCapabilityState(): CountryCapabilityState {
     assimilationProgress: 0,
     refugeesHosted: 0,
     populationAbsolute: 0,
+    logisticsInvestments: [],
   };
 }
 
@@ -136,6 +138,7 @@ function cloneCapabilityState(state: CountryCapabilityState): CountryCapabilityS
     manpower: { ...state.manpower },
     demographics: { ...state.demographics },
     culturalProximity: { ...state.culturalProximity },
+    logisticsInvestments: [...state.logisticsInvestments],
   };
 }
 
@@ -408,6 +411,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       demographics,
       demographicType: demographicType({ demographics }),
       borderPolicy: "selective",
+      logisticsInvestments: [],
       culturalProximity,
       assimilationProgress: 0,
       refugeesHosted: 0,
@@ -452,7 +456,9 @@ export function evaluateCapabilityChange(
   const type = demographicType({ demographics });
   const consumption = consumptionDrive({ demographics });
   const cliff = demographicCliff(demographics);
-  const countryLogistics = context.countryId !== undefined && context.regions ? getCountryLogisticsFromRegions(context.regions, context.countryId) : baseline.logistics;
+  const countryLogisticsBase = context.countryId !== undefined && context.regions ? getCountryLogisticsFromRegions(context.regions, context.countryId) : baseline.logistics;
+  const logisticsInvestmentBonus = (state.logisticsInvestments ?? []).reduce((sum, inv) => sum + inv.bonus, 0);
+  const countryLogistics = clamp(countryLogisticsBase + logisticsInvestmentBonus, 0, 100);
   const change: StrategicComponents = {
     economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty),
     population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty),
@@ -524,6 +530,7 @@ export function evaluateCapabilityChange(
     assimilationProgress: postAssimilationState.assimilationProgress,
     refugeesHosted: postRefugeeState.refugeesHosted + (populationScale > 0 ? populationScale * refugeeFlow * 0.3 : 0),
     populationAbsolute: postRefugeeState.populationAbsolute + (immigrationEffects.populationDelta * 12_000_000),
+    logisticsInvestments: state.logisticsInvestments,
   };
   return updated;
 }
@@ -738,9 +745,18 @@ export function loadCapabilityStatesFromSnapshot(countries: Country[], entries: 
       assimilationProgress: clamp(entry[12] ?? 0, 0, 100),
       refugeesHosted: clamp(entry[13] ?? 0, 0, 500_000_000),
       populationAbsolute: clamp(entry[11] ?? 0, 0, 2_000_000_000),
+      logisticsInvestments: [],
     };
   });
 }
+
+export type LogisticsInvestment = {
+  id: string;
+  regionId: number;
+  type: "port" | "road" | "airport" | "rail";
+  bonus: number;
+  remainingTurns: number;
+};
 
 export type CapabilityDelta = {
   key: ComponentKey;
