@@ -1924,7 +1924,7 @@ export class WorldEngine {
     if (policy.duration && policy.lastUsedTurn + policy.cooldown > this.turn) return false;
     if (policy.condition) {
       const state = this.countryCapabilityStates[this.playerCountryId];
-      if (!state || !policy.condition(state)) return false;
+      if (!state || !policy.condition(state, this.strategicRegions)) return false;
     }
     this.playerPolicyState.decisionPoints -= policy.cost;
     this.playerPolicyState.lastDecisionTurn = this.turn;
@@ -1937,6 +1937,28 @@ export class WorldEngine {
     return true;
   }
 
+  activateLogisticsPolicy(policyId: PolicyDecisionId, regionId: number) {
+    if (this.gameMode !== "strategy" || this.playerCountryId === null) return false;
+    const policy = this.playerPolicyState.decisions[policyId];
+    if (!policy || this.playerPolicyState.decisionPoints < policy.cost) return false;
+    if (policy.duration && policy.lastUsedTurn + policy.cooldown > this.turn) return false;
+    const region = this.strategicRegions.find((r) => r.id === regionId && r.ownerId === this.playerCountryId);
+    if (!region) return false;
+    if (policy.condition) {
+      const state = this.countryCapabilityStates[this.playerCountryId];
+      if (!state || !policy.condition(state, this.strategicRegions)) return false;
+    }
+    this.playerPolicyState.decisionPoints -= policy.cost;
+    this.playerPolicyState.lastDecisionTurn = this.turn;
+    const activated = { ...policy, lastUsedTurn: this.turn };
+    this.playerPolicyState.activePolicies = [...this.playerPolicyState.activePolicies.filter((p) => p.id !== policyId), activated];
+    this.playerPolicyState.decisions = { ...this.playerPolicyState.decisions, [policyId]: activated };
+    this.strategicComponentCache.clear();
+    this.strategicPowerCache.clear();
+    this.applyLogisticsPolicyEffect(policyId, this.playerCountryId, regionId);
+    return true;
+  }
+
   getAvailablePlayerPolicies(countryId: number): PlayerPolicyDecision[] {
     const state = this.countryCapabilityStates[countryId];
     if (!state) return [];
@@ -1945,17 +1967,16 @@ export class WorldEngine {
     return policies.filter((policy) => {
       if (this.playerPolicyState.decisionPoints < policy.cost) return false;
       if (policy.duration && policy.lastUsedTurn + policy.cooldown > now) return false;
-      if (policy.condition && !policy.condition(state)) return false;
+      if (policy.condition && !policy.condition(state, this.strategicRegions)) return false;
       return true;
     });
   }
 
-  private applyLogisticsPolicyEffect(policyId: PolicyDecisionId, countryId: number) {
+  private applyLogisticsPolicyEffect(policyId: PolicyDecisionId, countryId: number, targetRegionId?: number) {
     const state = this.countryCapabilityStates[countryId];
     if (!state) return;
-    const region = this.strategicRegions
-      .filter((r) => r.ownerId === countryId)
-      .sort((a, b) => b.areaKm2 - a.areaKm2 || a.id - b.id)[0];
+    const owned = this.strategicRegions.filter((r) => r.ownerId === countryId);
+    const region = targetRegionId !== undefined ? owned.find((r) => r.id === targetRegionId) : owned.sort((a, b) => b.areaKm2 - a.areaKm2 || a.id - b.id)[0];
     if (!region) return;
     let type: LogisticsInvestment["type"] | null = null;
     let bonus = 0;
