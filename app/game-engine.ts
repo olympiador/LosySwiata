@@ -8,7 +8,8 @@ import { ADMIN1_DEFLATE_BASE64, ADMIN1_HEIGHT, ADMIN1_ISO, ADMIN1_NAMES, ADMIN1_
 import { ELEVATION_HEIGHT, ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH } from "./elevation-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
-import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, type CountryCapabilityState, type CapabilityDelta, type RegimeType } from "./country-capability";
+import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy } from "./country-capability";
+export type { PolicyDecisionId, PlayerPolicyDecision, PlayerPolicyState, BorderPolicy };
 
 export const MAP_W = 4320;
 export const MAP_H = 2160;
@@ -85,9 +86,6 @@ export type StrategicTerritoryEvent = {
 export type StrategicRoundResult = { records: TurnRecord[]; changedIndices: number[] };
 export type StrategicDefensePosture = "continue" | "general" | "sector";
 export type StrategicDefenseState = { posture: StrategicDefensePosture; focusRegionId: number | null; mobilizedUntil: number; mobilizationCooldownUntil: number };
-export type PolicyDecisionId = "media-oversight" | "research-program" | "full-mobilization" | "open-borders" | "close-borders" | "propaganda-offensive" | "diplomatic-pressure" | "selective-immigration" | "mass-immigration-former-colonies";
-export type PlayerPolicyDecision = { id: PolicyDecisionId; name: string; description: string; cost: number; effects: Partial<CountryCapabilityState["components"]> & { informationEnvironment?: Partial<CountryCapabilityState["informationEnvironment"]>; manpower?: Partial<CountryCapabilityState["manpower"]>; immigrationPolicy?: "closed" | "selective" | "open" | "mass"; technologyBurst?: number; stabilityDelta?: number }; costs: Partial<CountryCapabilityState["components"]> & { stabilityDelta?: number; economyDelta?: number }; duration?: number; cooldown: number; lastUsedTurn: number; condition?: (state: CountryCapabilityState) => boolean; };
-export type PlayerPolicyState = { decisions: Record<PolicyDecisionId, PlayerPolicyDecision>; activePolicies: PlayerPolicyDecision[]; decisionPoints: number; lastDecisionTurn: number };
 export type StrategicComponents = { economy: number; population: number; technology: number; logistics: number; military: number; stability: number };
 export type StrategicStrength = { power: number; rating: number; rank: number; activeCountries: number; tier: "Potęga" | "Silne" | "Średnie" | "Słabe"; components: StrategicComponents; exhaustion: number; integration: number };
 export type StrategicStrengthEntry = StrategicStrength & { countryId: number };
@@ -194,7 +192,7 @@ export type GameSnapshot = {
   runs: Array<[number, number]>;
   history: TurnRecord[];
   defeats?: number[];
-  countryCapabilityStates?: Array<{ components: StrategicComponents; uncertainty: number; change: StrategicComponents }>;
+  countryCapabilityStates?: number[][];
 };
 
 type CountryRow = {
@@ -643,7 +641,7 @@ export class WorldEngine {
     this.rngState = this.seed;
     this.elevation = elevation;
     this.admin1At = admin1At;
-    this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(countries);
+    this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, undefined);
     for (let y = 0; y < MAP_H; y++) {
       const latitude = 90 - ((y + 0.5) / MAP_H) * 180;
       this.rowWeight[y] = Math.max(0.02, Math.cos(latitude * Math.PI / 180));
@@ -1881,9 +1879,9 @@ export class WorldEngine {
   private advanceCapabilityStates() {
     if (this.gameMode !== "strategy" || this.turn <= 0) return;
     const states = this.countryCapabilityStates;
-    if (!states.length) this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries);
+    if (!states.length) this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, undefined);
     this.advancePlayerPolicies();
-    const playerEffects = this.playerCountryId !== null ? getActivePlayerPolicyEffects(this.playerPolicyState, this.turn) : {};
+    const playerEffects = this.playerCountryId !== null ? getActivePlayerPolicyEffects(this.playerPolicyState) : {};
     for (let index = 0; index < this.countries.length; index++) {
       const state = this.countryCapabilityStates[index];
       if (!state || state.lastEvaluatedTurn === this.turn) continue;
@@ -3167,7 +3165,7 @@ export class WorldEngine {
     this.history = [];
     this.defeats.fill(0);
     this.undoStack = [];
-    this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries);
+    this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, undefined);
     this.playerPolicyState.decisionPoints = 0;
     this.playerPolicyState.lastDecisionTurn = 0;
     this.playerPolicyState.activePolicies = [];
@@ -3212,7 +3210,7 @@ export class WorldEngine {
       runs: this.runsCache.map(([owner, count]) => [owner, count]),
       history: this.history.map((record) => ({ ...record })),
       defeats: [...this.defeats],
-      countryCapabilityStates: capabilityStateToSnapshotArray(this.countryCapabilityStates),
+      countryCapabilityStates: this.countryCapabilityStates.map(capabilityStateToSnapshotArray),
     };
   }
 

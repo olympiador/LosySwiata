@@ -1,6 +1,10 @@
 import type { Country, StrategicComponents } from "./game-engine";
 
 export type RegimeType = "democracy" | "authoritarian" | "totalitarian";
+export type AgeGroup = "children" | "youth" | "primeAge" | "middleAge" | "elderly" | "veryOld";
+export type DemographicPyramid = Partial<Record<AgeGroup, number>>;
+export type DemographicType = "healthy" | "chimney" | "inverted";
+export type BorderPolicy = "closed" | "selective" | "open" | "mass";
 
 export type CountryCapabilityState = {
   components: StrategicComponents;
@@ -22,6 +26,13 @@ export type CountryCapabilityState = {
     mobilization: "hidden" | "open" | "full";
     maintenanceCost: number;
   };
+  demographics: DemographicPyramid;
+  demographicType: DemographicType;
+  borderPolicy: BorderPolicy;
+  culturalProximity: Record<number, number>;
+  assimilationProgress: number;
+  refugeesHosted: number;
+  populationAbsolute: number;
 };
 
 export type PolicyDecisionId = "media-oversight" | "research-program" | "full-mobilization" | "open-borders" | "close-borders" | "propaganda-offensive" | "diplomatic-pressure" | "selective-immigration" | "mass-immigration-former-colonies";
@@ -34,11 +45,12 @@ export type PlayerPolicyDecision = {
   effects: Partial<StrategicComponents> & {
     informationEnvironment?: Partial<CountryCapabilityState["informationEnvironment"]>;
     manpower?: Partial<CountryCapabilityState["manpower"]>;
-    immigrationPolicy?: "closed" | "selective" | "open" | "mass";
+    immigrationPolicy?: BorderPolicy;
     technologyBurst?: number;
     stabilityDelta?: number;
+    combatExperienceChange?: number;
   };
-  costs: Partial<StrategicComponents> & { stabilityDelta?: number; economyDelta?: number };
+  costs: Partial<StrategicComponents> & { stabilityDelta?: number | ((state: CountryCapabilityState) => number); economyDelta?: number | ((state: CountryCapabilityState) => number) };
   duration?: number;
   cooldown: number;
   lastUsedTurn: number;
@@ -87,6 +99,46 @@ function informationEnvironmentEffect(regimeType: RegimeType, score: number) {
   return 0;
 }
 
+function defaultPyramid(): DemographicPyramid {
+  return { children: 0.18, youth: 0.12, primeAge: 0.34, middleAge: 0.22, elderly: 0.11, veryOld: 0.03 };
+}
+
+function defaultProximity(): Record<number, number> {
+  return {};
+}
+
+function defaultInitialCountryCapabilityState(): CountryCapabilityState {
+  return {
+    components: { economy: 0, population: 0, technology: 0, logistics: 0, military: 0, stability: 0 },
+    uncertainty: 0.18,
+    lastEvaluatedTurn: 0,
+    change: { economy: 0, population: 0, technology: 0, logistics: 0, military: 0, stability: 0 },
+    regimeType: "democracy",
+    informationEnvironment: { score: 45, techComponent: 50, mediaControl: 30, servicesStrength: 35 },
+    combatExperience: 0,
+    manpower: { available: 0, active: 0, reserves: 0, mobilization: "hidden", maintenanceCost: 0 },
+    demographics: defaultPyramid(),
+    demographicType: "chimney",
+    borderPolicy: "selective",
+    culturalProximity: defaultProximity(),
+    assimilationProgress: 0,
+    refugeesHosted: 0,
+    populationAbsolute: 0,
+  };
+}
+
+function cloneCapabilityState(state: CountryCapabilityState): CountryCapabilityState {
+  return {
+    ...state,
+    components: { ...state.components },
+    change: { ...state.change },
+    informationEnvironment: { ...state.informationEnvironment },
+    manpower: { ...state.manpower },
+    demographics: { ...state.demographics },
+    culturalProximity: { ...state.culturalProximity },
+  };
+}
+
 function initialManpower(countryId: number) {
   const base = 18 + ((countryId * 311.4) % 34);
   return {
@@ -113,6 +165,136 @@ export function initialRegimeType(countryId: number): RegimeType {
   return "democracy";
 }
 
+export function demographicType(state: Pick<CountryCapabilityState, "demographics">): DemographicType {
+  const youthBase = (state.demographics.children ?? 0) + (state.demographics.youth ?? 0);
+  if (youthBase > 0.35) return "healthy";
+  if (youthBase < 0.25) return "inverted";
+  return "chimney";
+}
+
+export function consumptionDrive(state: Pick<CountryCapabilityState, "demographics">): number {
+  return (
+    (state.demographics.primeAge ?? 0) * 0.6 +
+    (state.demographics.youth ?? 0) * 0.4 -
+    (state.demographics.elderly ?? 0) * 0.3 -
+    (state.demographics.veryOld ?? 0) * 0.5
+  );
+}
+
+export function availableWorkingAgeShare(state: Pick<CountryCapabilityState, "demographics">): number {
+  return (
+    (state.demographics.youth ?? 0) * 0.5 +
+    (state.demographics.primeAge ?? 0) * 0.9 +
+    (state.demographics.middleAge ?? 0) * 0.6
+  );
+}
+
+export function culturalProximityBetween(ownerId: number, regionId: number, proximityMap: Record<number, number>): number {
+  return proximityMap[regionId] ?? 0.15;
+}
+
+export function assimilationRate(proximity: number, regimeType: RegimeType): number {
+  const base = 0.015;
+  const culturalBonus = proximity * 0.03;
+  const regimeBonus = regimeType === "totalitarian" ? 0.01 : 0;
+  return base + culturalBonus + regimeBonus;
+}
+
+export function refugeeFlowFrom(warIntensity: number, borderPolicy: BorderPolicy): number {
+  if (warIntensity <= 0) return 0;
+  const maxRefugees = 0.3;
+  const openness = borderPolicy === "closed" ? 0.1 : borderPolicy === "selective" ? 0.4 : borderPolicy === "open" ? 0.8 : 1.0;
+  return maxRefugees * warIntensity * openness;
+}
+
+export function refugeeEconomyEffect(refugeeShare: number): number {
+  if (refugeeShare <= 0) return 0;
+  return Math.min(0.06, 0.02 + refugeeShare * 0.08);
+}
+
+export function refugeeStabilityEffect(refugeeShare: number): number {
+  if (refugeeShare <= 0) return 0;
+  return Math.min(0.08, 0.02 + refugeeShare * 0.12);
+}
+
+function updateDemographics(state: CountryCapabilityState, context: { hasIncoming: boolean; hasOutgoing: boolean; warIntensity: number; technology: number; immigrationPolicy: BorderPolicy }): DemographicPyramid {
+  const pyramid = { ...state.demographics };
+  const birthRate = 0.005 - (context.technology / 100) * 0.003 + (context.immigrationPolicy === "mass" ? 0.001 : 0);
+  const deathRate = 0.004 + (context.technology < 40 ? 0.001 : 0);
+  const agingFactor = 0.001;
+  const warPrimeLoss = context.warIntensity * 0.012;
+
+  pyramid.children = clamp((pyramid.children ?? 0) * (1 + birthRate - deathRate * 0.3), 0.05, 0.5);
+  pyramid.youth = clamp((pyramid.youth ?? 0) * (1 - agingFactor * 0.5), 0.05, 0.3);
+  pyramid.primeAge = clamp((pyramid.primeAge ?? 0) * (1 - agingFactor - warPrimeLoss), 0.1, 0.6);
+  pyramid.middleAge = clamp((pyramid.middleAge ?? 0) * (1 - agingFactor * 0.8), 0.05, 0.4);
+  pyramid.elderly = clamp((pyramid.elderly ?? 0) * (1 + agingFactor * 1.2), 0.05, 0.5);
+  pyramid.veryOld = clamp((pyramid.veryOld ?? 0) * (1 + agingFactor * 1.5), 0.01, 0.4);
+
+  const total = Object.values(pyramid).reduce((a, b) => a + (b ?? 0), 0);
+  if (total > 0) {
+    for (const key of Object.keys(pyramid) as AgeGroup[]) {
+      pyramid[key] = (pyramid[key] ?? 0) / total;
+    }
+  }
+  return pyramid;
+}
+
+function applyRefugeeFlow(state: CountryCapabilityState, flow: number): { state: CountryCapabilityState; refugeesIn: number } {
+  if (flow <= 0) return { state, refugeesIn: 0 };
+  const workingAge = availableWorkingAgeShare(state);
+  const refugeesIn = Math.max(0, state.populationAbsolute * flow * workingAge);
+  const newPopulation = state.populationAbsolute + refugeesIn;
+  const updated = cloneCapabilityState(state);
+  updated.populationAbsolute = newPopulation;
+  updated.refugeesHosted += refugeesIn;
+  return { state: updated, refugeesIn };
+}
+
+function applyAssimilation(state: CountryCapabilityState, rate: number): CountryCapabilityState {
+  const updated = cloneCapabilityState(state);
+  updated.assimilationProgress = clamp(updated.assimilationProgress + rate * 100, 0, 100);
+  return updated;
+}
+
+function computeImmigrationEffects(policy: BorderPolicy, components: StrategicComponents, regimeType: RegimeType) {
+  const pop = components.population;
+  switch (policy) {
+    case "closed":
+      return { populationDelta: 0, stabilityDelta: regimeType === "democracy" ? -2 : 2, infoEnvDelta: 0, mediaControlDelta: 0 };
+    case "selective":
+      return { populationDelta: pop * 0.0005, stabilityDelta: -1, infoEnvDelta: 0, mediaControlDelta: 0 };
+    case "open":
+      return { populationDelta: pop * 0.0015, stabilityDelta: -3, infoEnvDelta: 0, mediaControlDelta: 0 };
+    case "mass":
+      return { populationDelta: pop * 0.003, stabilityDelta: -6, infoEnvDelta: 0, mediaControlDelta: 0 };
+  }
+}
+
+const MANUAL_BASELINES: Record<string, {
+  economy?: number;
+  population?: number;
+  technology?: number;
+  logistics?: number;
+  military?: number;
+  stability?: number;
+  regimeType?: RegimeType;
+  informationEnvironment?: { score: number; techComponent: number; mediaControl: number; servicesStrength: number };
+  combatExperience?: number;
+}> = {
+  POL: { economy: 58, population: 65, technology: 68, logistics: 72, military: 45, stability: 53, regimeType: "democracy", informationEnvironment: { score: 48, techComponent: 68, mediaControl: 25, servicesStrength: 40 }, combatExperience: 5 },
+  ROU: { economy: 45, population: 48, technology: 55, logistics: 62, military: 24, stability: 55, regimeType: "democracy", informationEnvironment: { score: 42, techComponent: 55, mediaControl: 30, servicesStrength: 35 }, combatExperience: 4 },
+  UKR: { economy: 38, population: 60, technology: 48, logistics: 50, military: 32, stability: 38, regimeType: "democracy", informationEnvironment: { score: 38, techComponent: 48, mediaControl: 35, servicesStrength: 30 }, combatExperience: 12 },
+  BLR: { economy: 16, population: 28, technology: 38, logistics: 40, military: 13, stability: 42, regimeType: "authoritarian", informationEnvironment: { score: 66, techComponent: 38, mediaControl: 80, servicesStrength: 75 }, combatExperience: 0 },
+  RUS: { economy: 72, population: 85, technology: 65, logistics: 55, military: 85, stability: 48, regimeType: "authoritarian", informationEnvironment: { score: 76, techComponent: 65, mediaControl: 85, servicesStrength: 80 }, combatExperience: 18 },
+  DEU: { economy: 85, population: 83, technology: 90, logistics: 88, military: 50, stability: 74, regimeType: "democracy", informationEnvironment: { score: 45, techComponent: 90, mediaControl: 20, servicesStrength: 35 }, combatExperience: 2 },
+  FRA: { economy: 78, population: 67, technology: 82, logistics: 80, military: 55, stability: 65, regimeType: "democracy", informationEnvironment: { score: 47, techComponent: 82, mediaControl: 22, servicesStrength: 38 }, combatExperience: 3 },
+  GBR: { economy: 75, population: 67, technology: 80, logistics: 78, military: 58, stability: 70, regimeType: "democracy", informationEnvironment: { score: 46, techComponent: 80, mediaControl: 21, servicesStrength: 37 }, combatExperience: 3 },
+  USA: { economy: 95, population: 82, technology: 95, logistics: 85, military: 95, stability: 68, regimeType: "democracy", informationEnvironment: { score: 50, techComponent: 95, mediaControl: 18, servicesStrength: 32 }, combatExperience: 8 },
+  TUR: { economy: 52, population: 84, technology: 55, logistics: 58, military: 40, stability: 50, regimeType: "authoritarian", informationEnvironment: { score: 58, techComponent: 55, mediaControl: 55, servicesStrength: 52 }, combatExperience: 6 },
+  PRK: { economy: 10, population: 25, technology: 25, logistics: 20, military: 35, stability: 88, regimeType: "totalitarian", informationEnvironment: { score: 82, techComponent: 25, mediaControl: 95, servicesStrength: 90 }, combatExperience: 5 },
+};
+
 export function initialCapabilityStates(countries: Country[]): CountryCapabilityState[] {
   return countries.map((country) => {
     const calibrated = MANUAL_BASELINES[country.iso3 as keyof typeof MANUAL_BASELINES];
@@ -126,16 +308,19 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
     };
     const components = calibrated
       ? {
-          economy: calibrated.economy ?? fallback.economy,
-          population: calibrated.population ?? fallback.population,
-          technology: calibrated.technology ?? fallback.technology,
-          logistics: calibrated.logistics ?? fallback.logistics,
-          military: calibrated.military ?? fallback.military,
-          stability: calibrated.stability ?? fallback.stability,
+          economy: clamp(calibrated.economy ?? fallback.economy),
+          population: clamp(calibrated.population ?? fallback.population),
+          technology: clamp(calibrated.technology ?? fallback.technology),
+          logistics: clamp(calibrated.logistics ?? fallback.logistics),
+          military: clamp(calibrated.military ?? fallback.military),
+          stability: clamp(calibrated.stability ?? fallback.stability),
         }
-      : fallback;
+      : { ...fallback, stability: clamp(fallback.stability) };
     const regimeType = calibrated?.regimeType ?? initialRegimeType(country.id);
     const informationEnvironment = calibrated?.informationEnvironment ?? initialInformationEnvironment(country.id);
+    const populationAbsolute = components.population * 12_000_000;
+    const demographics = defaultPyramid();
+    const culturalProximity = defaultProximity();
     return {
       components,
       uncertainty: 0.18 + ((country.id * 41.3) % 25) / 100,
@@ -152,6 +337,13 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       informationEnvironment,
       combatExperience: calibrated?.combatExperience ?? Math.round(((country.id * 17.7) % 20)),
       manpower: initialManpower(country.id),
+      populationAbsolute,
+      demographics,
+      demographicType: demographicType({ demographics }),
+      borderPolicy: "selective",
+      culturalProximity,
+      assimilationProgress: 0,
+      refugeesHosted: 0,
     };
   });
 }
@@ -169,21 +361,15 @@ export function evaluateCapabilityChange(
     sanctionsPenalty?: number;
     immigrationDelta?: number;
     warIntensity?: number;
-    policyEffects?: {
-      mediaControlChange?: number;
-      servicesStrengthChange?: number;
-      technologyBurst?: number;
-      immigrationPolicy?: "closed" | "selective" | "open" | "mass";
-      combatExperienceChange?: number;
-    };
+    policyEffects?: any;
   },
   turn: number,
   seed: number,
 ) {
   if (state.lastEvaluatedTurn === turn) return state;
+  const warIntensity = context.warIntensity ?? (context.hasIncoming ? 0.6 : context.hasOutgoing ? 0.3 : 0);
   const pressure = context.hasIncoming ? 0.12 : context.hasOutgoing ? -0.05 : 0;
   const occupationLoad = Math.min(0.18, context.activeOccupations * 0.04);
-  const warIntensity = context.warIntensity ?? (context.hasIncoming ? 0.6 : context.hasOutgoing ? 0.3 : 0);
   const sanctionsPenalty = context.sanctionsPenalty ?? 0;
   const immigrationDelta = context.immigrationDelta ?? 0;
   const technologyImpact = clamp(state.components.technology / 100 * 0.012, 0, 0.01);
@@ -207,28 +393,28 @@ export function evaluateCapabilityChange(
   const infoEnv = state.informationEnvironment;
   const infoEffect = informationEnvironmentEffect(regimeType, infoEnv.score);
   const stabilityComposite = state.components.stability + change.stability;
-  const stabilityFinal = clamp((stabilityComposite + infoEffect + foreignBasePenalty) * regimeMod);
+  const stabilityFinal = clamp((stabilityComposite + infoEffect + foreignBasePenalty) * regimeMod, 0, 100);
   const policy = context.policyEffects ?? {};
-  const immigrationPolicy = policy.immigrationPolicy ?? "closed";
+  const immigrationPolicy = policy.borderPolicy ?? state.borderPolicy;
   const immigrationEffects = computeImmigrationEffects(immigrationPolicy, state.components, regimeType);
   const informationEnvironment = {
-    score: clamp(infoEnv.score + (policy.mediaControlChange ?? 0) + (policy.servicesStrengthChange ?? 0) * 0.3 + immigrationEffects.infoEnvDelta),
+    score: clamp(infoEnv.score + (policy.informationEnvironment?.techComponent ?? 0) * 0.1 + (policy.informationEnvironment?.servicesStrength ?? 0) * 0.3),
     techComponent: infoEnv.techComponent,
-    mediaControl: clamp(infoEnv.mediaControl + (policy.mediaControlChange ?? 0) + immigrationEffects.mediaControlDelta),
-    servicesStrength: clamp(infoEnv.servicesStrength + (policy.servicesStrengthChange ?? 0)),
+    mediaControl: clamp(infoEnv.mediaControl + (policy.informationEnvironment?.mediaControl ?? 0) + immigrationEffects.mediaControlDelta),
+    servicesStrength: clamp(infoEnv.servicesStrength + (policy.informationEnvironment?.servicesStrength ?? 0)),
   };
   const population = state.components.population + change.population + immigrationEffects.populationDelta;
   const military = state.components.military + change.military;
   const activeManpower = Math.max(0, Math.round(military * 0.55));
   const reserves = Math.max(0, Math.round(population * 0.12 - activeManpower));
-  const mobilization = state.manpower.mobilization;
+  const mobilization = policy.manpower?.mobilization ?? state.manpower.mobilization;
   const mobilizationMultiplier = mobilization === "full" ? 1.35 : mobilization === "open" ? 1.18 : 1;
   const frontCount = context.hasOutgoing ? 1 : 0;
   const maintenanceCost = Math.round((military * 0.08 + frontCount * 6 + (mobilization === "full" ? 14 : mobilization === "open" ? 7 : 0)) * 10) / 10;
-  return {
+  const updated = {
     components: {
       economy: clamp(state.components.economy + change.economy),
-      population: clamp(population, 0, 400),
+      population: clamp(population, 0, 100),
       technology: clamp(state.components.technology + change.technology + (policy.technologyBurst ?? 0)),
       logistics: clamp(state.components.logistics + change.logistics),
       military: clamp(military),
@@ -248,24 +434,18 @@ export function evaluateCapabilityChange(
       available: Math.max(0, Math.round(population * 0.22 * mobilizationMultiplier)),
       active: Math.min(activeManpower, Math.max(0, Math.round(population * 0.22 * mobilizationMultiplier))),
       reserves: Math.max(0, reserves),
-      mobilization: state.manpower.mobilization,
+      mobilization,
       maintenanceCost,
     },
+    demographics: updateDemographics(state, { hasIncoming: context.hasIncoming, hasOutgoing: context.hasOutgoing, warIntensity, technology: state.components.technology, immigrationPolicy }),
+    demographicType: demographicType({ demographics: updateDemographics(state, { hasIncoming: context.hasIncoming, hasOutgoing: context.hasOutgoing, warIntensity, technology: state.components.technology, immigrationPolicy }) }),
+    borderPolicy: immigrationPolicy,
+    culturalProximity: state.culturalProximity,
+    assimilationProgress: clamp(state.assimilationProgress + (context.activeOccupations > 0 ? 0.05 : 0), 0, 100),
+    refugeesHosted: state.refugeesHosted,
+    populationAbsolute: state.populationAbsolute + (immigrationEffects.populationDelta * 12_000_000),
   };
-}
-
-function computeImmigrationEffects(policy: "closed" | "selective" | "open" | "mass", components: StrategicComponents, regimeType: RegimeType) {
-  const pop = components.population;
-  switch (policy) {
-    case "closed":
-      return { populationDelta: 0, stabilityDelta: regimeType === "democracy" ? -2 : 2, infoEnvDelta: 0, mediaControlDelta: 0 };
-    case "selective":
-      return { populationDelta: pop * 0.0005, stabilityDelta: -1, infoEnvDelta: 0, mediaControlDelta: 0 };
-    case "open":
-      return { populationDelta: pop * 0.0015, stabilityDelta: -3, infoEnvDelta: 0, mediaControlDelta: 0 };
-    case "mass":
-      return { populationDelta: pop * 0.003, stabilityDelta: -6, infoEnvDelta: 0, mediaControlDelta: 0 };
-  }
+  return updated;
 }
 
 export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, PlayerPolicyDecision> {
@@ -305,12 +485,12 @@ export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, P
       duration: 12,
       cooldown: 20,
       lastUsedTurn: -20,
-      condition: (state) => true,
+      condition: (state) => false,
     },
     "open-borders": {
       id: "open-borders",
       name: "Otwarte granice",
-      description: "Luźna polityka imigracyjna. Przyciąka pracowników, ale wzrastają napięcia społeczne.",
+      description: "Luźna polityka imigracyjna. Przyciąga siłę roboczą, ale powoduje napięcia społeczne.",
       cost: 1,
       effects: { immigrationPolicy: "open" },
       costs: { stabilityDelta: -3 },
@@ -322,152 +502,114 @@ export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, P
     "close-borders": {
       id: "close-borders",
       name: "Zamknięcie granic",
-      description: "Zamknięcie granic zwiększa kontrolę, ale ogranicza dostęp do pracy.",
+      description: "Zamknięcie granic. Zwiększa kontrolę, ale ogranicza dostęp do pracy.",
       cost: 1,
       effects: { immigrationPolicy: "closed" },
-      costs: {},
+      costs: { stabilityDelta: -2 },
       duration: 8,
       cooldown: 10,
       lastUsedTurn: -20,
-      condition: (state) => true,
+      condition: (state) => false,
     },
     "propaganda-offensive": {
       id: "propaganda-offensive",
       name: "Ofensywa propagandowa",
-      description: "Wzmocnienie kontroli informacyjnej za pomocą kampanii państwowej.",
+      description: "Kampania propagandowa. Wzmacnia kontrolę informacyjną, ale kosztuje.",
       cost: 2,
-      effects: { informationEnvironment: { score: 8 } },
+      effects: { informationEnvironment: { mediaControl: 8, servicesStrength: 5 } },
       costs: { economyDelta: -5, stabilityDelta: -2 },
       duration: 5,
       cooldown: 16,
       lastUsedTurn: -20,
-      condition: (state) => state.informationEnvironment.mediaControl > 30 || state.informationEnvironment.servicesStrength > 30,
+      condition: (state) => (state.informationEnvironment.mediaControl > 30 || state.informationEnvironment.servicesStrength > 30),
     },
     "diplomatic-pressure": {
       id: "diplomatic-pressure",
-      name: "Presja dyplomatyczna",
-      description: "Presja na sąsiadów, żeby wycofali bazy i wojska przy granicy.",
+      name: "Presja dyplomatyczna na NATO",
+      description: "Presja dyplomatyczna. Zmniejsza obecność baz obcych przy granicy.",
       cost: 2,
       effects: {},
       costs: { economyDelta: -3 },
       duration: 6,
       cooldown: 20,
       lastUsedTurn: -20,
-      condition: (state) => true,
+      condition: (state) => false,
     },
     "selective-immigration": {
       id: "selective-immigration",
-      name: "Selektywna imigracja",
-      description: "Polityka selektywna: przyciąka wykwalifikowanych migrantów z sąsiedztwa.",
+      name: "Imigracja selektywna",
+      description: "Selektywna polityka imigracyjna. Przyciąka wykwalifikowanych pracowników.",
       cost: 1,
       effects: { immigrationPolicy: "selective" },
       costs: { stabilityDelta: -1 },
       duration: 10,
-      cooldown: 12,
+      cooldown: 14,
       lastUsedTurn: -20,
-      condition: (state) => state.components.technology > 30,
+      condition: (state) => state.components.technology > 40,
     },
     "mass-immigration-former-colonies": {
       id: "mass-immigration-former-colonies",
-      name: "Imigracja z byłych kolonii",
-      description: "Program imigracyjny skierowany na byłe kolonie. Duży wzrost populacji, duże koszty społeczne.",
+      name: "Imigracja masowa z byłych kolonii",
+      description: "Masowy napływ z byłych kolonii i sąsiedztwa. Wzrost populacji, ale koszty społeczne.",
       cost: 2,
       effects: { immigrationPolicy: "mass" },
-      costs: { stabilityDelta: -6 },
+      costs: { stabilityDelta: -6, economyDelta: -2 },
       duration: 12,
-      cooldown: 24,
+      cooldown: 20,
       lastUsedTurn: -20,
-      condition: (state) => state.components.technology > 50 && state.components.economy > 55,
+      condition: (state) => false,
     },
   };
 }
 
-export function getActivePlayerPolicyEffects(state: PlayerPolicyState, activeTurn: number) {
-  const active = state.activePolicies.filter((policy) => {
-    if (!policy.duration) return true;
-    const usedAt = policy.lastUsedTurn;
-    const remaining = usedAt + policy.duration - activeTurn;
-    return remaining > 0;
-  });
-  return active.reduce<{
-    mediaControlChange?: number;
-    servicesStrengthChange?: number;
-    technologyBurst?: number;
-    immigrationPolicy?: "closed" | "selective" | "open" | "mass";
-    stabilityDelta?: number;
-    economyDelta?: number;
-  }>((acc, policy) => {
-    const effects = policy.effects;
-    if (effects.informationEnvironment?.mediaControl) acc.mediaControlChange = (acc.mediaControlChange ?? 0) + effects.informationEnvironment.mediaControl;
-    if (effects.informationEnvironment?.servicesStrength) acc.servicesStrengthChange = (acc.servicesStrengthChange ?? 0) + effects.informationEnvironment.servicesStrength;
-    if (effects.technologyBurst) acc.technologyBurst = (acc.technologyBurst ?? 0) + effects.technologyBurst;
-    if (effects.immigrationPolicy) acc.immigrationPolicy = effects.immigrationPolicy;
-    if (effects.stabilityDelta) acc.stabilityDelta = (acc.stabilityDelta ?? 0) + effects.stabilityDelta;
-    if (policy.costs.stabilityDelta) acc.stabilityDelta = (acc.stabilityDelta ?? 0) + policy.costs.stabilityDelta;
-    if (policy.costs.economyDelta) acc.economyDelta = (acc.economyDelta ?? 0) + policy.costs.economyDelta;
-    return acc;
-  }, {});
+export function capabilityStateToSnapshotArray(state: CountryCapabilityState): number[] {
+  return [
+    state.components.economy,
+    state.components.population,
+    state.components.technology,
+    state.components.logistics,
+    state.components.military,
+    state.components.stability,
+    state.informationEnvironment.score,
+    state.combatExperience,
+    state.manpower.available,
+    state.manpower.active,
+    state.manpower.reserves,
+    state.populationAbsolute,
+    state.assimilationProgress,
+    state.refugeesHosted,
+  ];
 }
 
-export function capabilityStateToSnapshotArray(states: CountryCapabilityState[]) {
-  return states.map(({ components, uncertainty, lastEvaluatedTurn, change, regimeType, informationEnvironment, combatExperience, manpower }) => ({
-    components,
-    uncertainty: Math.round(uncertainty * 1000) / 1000,
-    lastEvaluatedTurn,
-    change,
-    regimeType,
-    informationEnvironment: {
-      score: Math.round(informationEnvironment.score * 1000) / 1000,
-      techComponent: Math.round(informationEnvironment.techComponent * 1000) / 1000,
-      mediaControl: Math.round(informationEnvironment.mediaControl * 1000) / 1000,
-      servicesStrength: Math.round(informationEnvironment.servicesStrength * 1000) / 1000,
-    },
-    combatExperience: Math.round(combatExperience * 100) / 100,
-    manpower,
-  }));
-}
-
-export function loadCapabilityStatesFromSnapshot(
-  countries: Country[],
-  entries?: Array<{
-    components: StrategicComponents;
-    uncertainty: number;
-    lastEvaluatedTurn?: number;
-    change: StrategicComponents;
-    regimeType?: RegimeType;
-    informationEnvironment?: { score: number; techComponent: number; mediaControl: number; servicesStrength: number };
-    combatExperience?: number;
-    manpower?: CountryCapabilityState["manpower"];
-  }>,
-) {
+export function loadCapabilityStatesFromSnapshot(countries: Country[], entries: number[][] | undefined): CountryCapabilityState[] {
   const defaults = initialCapabilityStates(countries);
   if (!entries?.length) return defaults;
-  return countries.map((country, index) => {
-    const entry = entries[index];
-    if (!entry) return defaults[index];
+  return entries.map((entry, index) => {
+    const country = countries[index];
+    if (!entry || entry.length < 8 || !country) return defaults[index] ?? defaultInitialCountryCapabilityState();
     return {
       components: {
-        economy: clamp(entry.components.economy),
-        population: clamp(entry.components.population),
-        technology: clamp(entry.components.technology),
-        logistics: clamp(entry.components.logistics),
-        military: clamp(entry.components.military),
-        stability: clamp(entry.components.stability),
+        economy: clamp(entry[0] ?? 0),
+        population: clamp(entry[1] ?? 0),
+        technology: clamp(entry[2] ?? 0),
+        logistics: clamp(entry[3] ?? 0),
+        military: clamp(entry[4] ?? 0),
+        stability: clamp(entry[5] ?? 0),
       },
-      uncertainty: clamp(entry.uncertainty, 0.05, 1),
-      lastEvaluatedTurn: entry.lastEvaluatedTurn ?? 0,
-      change: entry.change,
-      regimeType: entry.regimeType ?? initialRegimeType(country.id),
-      informationEnvironment: entry.informationEnvironment
-        ? {
-            score: clamp(entry.informationEnvironment.score),
-            techComponent: clamp(entry.informationEnvironment.techComponent),
-            mediaControl: clamp(entry.informationEnvironment.mediaControl),
-            servicesStrength: clamp(entry.informationEnvironment.servicesStrength),
-          }
-        : initialInformationEnvironment(country.id),
-      combatExperience: entry.combatExperience ?? 0,
-      manpower: entry.manpower ?? initialManpower(country.id),
+      uncertainty: 0.18,
+      lastEvaluatedTurn: 0,
+      change: { economy: 0, population: 0, technology: 0, logistics: 0, military: 0, stability: 0 },
+      regimeType: "democracy",
+      informationEnvironment: { score: clamp(entry[6] ?? 45), techComponent: 50, mediaControl: 30, servicesStrength: 35 },
+      combatExperience: clamp(entry[7] ?? 0, 0, 25),
+      manpower: { available: clamp(entry[8] ?? 0, 0, 200), active: clamp(entry[9] ?? 0, 0, 100), reserves: clamp(entry[10] ?? 0, 0, 200), mobilization: "hidden", maintenanceCost: 0 },
+      demographics: defaultPyramid(),
+      demographicType: "chimney",
+      borderPolicy: "selective",
+      culturalProximity: defaultProximity(),
+      assimilationProgress: clamp(entry[12] ?? 0, 0, 100),
+      refugeesHosted: clamp(entry[13] ?? 0, 0, 500_000_000),
+      populationAbsolute: clamp(entry[11] ?? 0, 0, 2_000_000_000),
     };
   });
 }
@@ -503,34 +645,24 @@ export function regimeLabel(regimeType: RegimeType): string {
   }[regimeType];
 }
 
-export function informationEnvironmentLabel(score: number): string {
-  if (score >= 80) return "Pełna kontrola";
-  if (score >= 65) return "Silna kontrola";
-  if (score >= 50) return "Częściowa kontrola";
-  if (score >= 35) return "Ograniczona kontrola";
-  return "Wolne media";
+export function demographicLabel(type: DemographicType): string {
+  return {
+    healthy: "Zdrowa piramida",
+    chimney: "Kominek",
+    inverted: "Odwrócona piramida",
+  }[type];
 }
 
-const MANUAL_BASELINES: Record<string, {
-  economy?: number;
-  population?: number;
-  technology?: number;
-  logistics?: number;
-  military?: number;
-  stability?: number;
-  regimeType?: RegimeType;
-  informationEnvironment?: { score: number; techComponent: number; mediaControl: number; servicesStrength: number };
-  combatExperience?: number;
-}> = {
-  POL: { economy: 58, population: 65, technology: 68, logistics: 72, military: 45, stability: 62, regimeType: "democracy", informationEnvironment: { score: 48, techComponent: 68, mediaControl: 25, servicesStrength: 40 }, combatExperience: 5 },
-  ROU: { economy: 45, population: 48, technology: 55, logistics: 62, military: 24, stability: 55, regimeType: "democracy", informationEnvironment: { score: 42, techComponent: 55, mediaControl: 30, servicesStrength: 35 }, combatExperience: 4 },
-  UKR: { economy: 38, population: 60, technology: 48, logistics: 50, military: 32, stability: 38, regimeType: "democracy", informationEnvironment: { score: 38, techComponent: 48, mediaControl: 35, servicesStrength: 30 }, combatExperience: 12 },
-  BLR: { economy: 16, population: 28, technology: 38, logistics: 40, military: 13, stability: 42, regimeType: "authoritarian", informationEnvironment: { score: 66, techComponent: 38, mediaControl: 80, servicesStrength: 75 }, combatExperience: 0 },
-  RUS: { economy: 72, population: 142, technology: 65, logistics: 55, military: 85, stability: 48, regimeType: "authoritarian", informationEnvironment: { score: 76, techComponent: 65, mediaControl: 85, servicesStrength: 80 }, combatExperience: 18 },
-  DEU: { economy: 85, population: 83, technology: 90, logistics: 88, military: 50, stability: 74, regimeType: "democracy", informationEnvironment: { score: 45, techComponent: 90, mediaControl: 20, servicesStrength: 35 }, combatExperience: 2 },
-  FRA: { economy: 78, population: 67, technology: 82, logistics: 80, military: 55, stability: 65, regimeType: "democracy", informationEnvironment: { score: 47, techComponent: 82, mediaControl: 22, servicesStrength: 38 }, combatExperience: 3 },
-  GBR: { economy: 75, population: 67, technology: 80, logistics: 78, military: 58, stability: 70, regimeType: "democracy", informationEnvironment: { score: 46, techComponent: 80, mediaControl: 21, servicesStrength: 37 }, combatExperience: 3 },
-  USA: { economy: 95, population: 331, technology: 95, logistics: 85, military: 95, stability: 68, regimeType: "democracy", informationEnvironment: { score: 50, techComponent: 95, mediaControl: 18, servicesStrength: 32 }, combatExperience: 8 },
-  TUR: { economy: 52, population: 84, technology: 55, logistics: 58, military: 40, stability: 50, regimeType: "authoritarian", informationEnvironment: { score: 58, techComponent: 55, mediaControl: 55, servicesStrength: 52 }, combatExperience: 6 },
-  PRK: { economy: 10, population: 25, technology: 25, logistics: 20, military: 35, stability: 88, regimeType: "totalitarian", informationEnvironment: { score: 82, techComponent: 25, mediaControl: 95, servicesStrength: 90 }, combatExperience: 5 },
-};
+export function getActivePlayerPolicyEffects(state: PlayerPolicyState): any {
+  const effects: any = {};
+  for (const policy of state.activePolicies) {
+    if (policy.effects.informationEnvironment?.mediaControl) effects.mediaControlChange = (effects.mediaControlChange ?? 0) + policy.effects.informationEnvironment.mediaControl;
+    if (policy.effects.informationEnvironment?.servicesStrength) effects.servicesStrengthChange = (effects.servicesStrengthChange ?? 0) + policy.effects.informationEnvironment.servicesStrength;
+    if (policy.effects.technologyBurst) effects.technologyBurst = (effects.technologyBurst ?? 0) + policy.effects.technologyBurst;
+    if (policy.effects.stabilityDelta) effects.stabilityDelta = (effects.stabilityDelta ?? 0) + policy.effects.stabilityDelta;
+    if (policy.effects.combatExperienceChange) effects.combatExperienceChange = (effects.combatExperienceChange ?? 0) + policy.effects.combatExperienceChange;
+    if (policy.effects.immigrationPolicy) effects.immigrationPolicy = policy.effects.immigrationPolicy;
+    if (policy.effects.manpower?.mobilization) effects.manpowerMobilization = policy.effects.manpower.mobilization;
+  }
+  return effects;
+}

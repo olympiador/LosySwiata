@@ -1,6 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+
+const SW_PATH = "/sw.js";
+
+function useServiceWorker() {
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register(SW_PATH).catch(() => {});
+  }, []);
+}
 import {
   ACTIONS,
   DIRECTIONS,
@@ -162,6 +171,7 @@ function History({ record }: { record: TurnRecord }) {
 }
 
 export default function Home() {
+  useServiceWorker();
   const [engine, setEngine] = useState<WorldEngine | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1283,7 +1293,7 @@ export default function Home() {
             {selectedDossier && selected && <aside className="country-dossier" aria-label={`Informacje o państwie ${selected.country.name}`}>
               <header><span>{selected.country.flag}</span><div><small>{selectedDossier.countryId === playerCountryId ? "TWOJE PAŃSTWO" : "KARTA PAŃSTWA"}</small><h2>{selected.country.name}</h2><em>{formatArea(selected.area)}</em></div><button onClick={() => setSelectedId(null)} aria-label="Zamknij kartę państwa">×</button></header>
               <section className="dossier-strength"><div><small>POTENCJAŁ</small><strong>{selectedDossier.strength.rating}<i>/100</i></strong><em>{selectedDossier.strength.tier}</em></div><div><small>RANKING POTENCJAŁU</small><strong>#{selectedDossier.strength.rank || "—"}</strong><em>z {selectedDossier.strength.activeCountries}</em></div><div><small>WYNIK MODELU</small><strong>{Math.round(selectedDossier.strength.power)}</strong><em>baza 2021 + stan gry</em></div></section>
-              <section className="capacity-breakdown"><header><b>MOŻLIWOŚCI PAŃSTWA</b><span>0–100+</span></header><div>{Object.entries(selectedDossier.strength.components).map(([key, value]) => <span key={key}><small>{componentLabels[key as keyof typeof componentLabels]}</small><b>{Math.round(value)}</b><i><em style={{ width: `${Math.min(100, value)}%` }} /></i></span>)}</div><footer><span>Wyczerpanie wojenne <b>{Math.round(selectedDossier.strength.exhaustion)}%</b></span><span>Integracja zdobyczy <b>{Math.round(selectedDossier.strength.integration)}%</b></span></footer></section>
+              <section className="capacity-breakdown"><header><b>MOŻLIWOŚCI PAŃSTWA</b><span>0–100</span></header><div>{Object.entries(selectedDossier.strength.components).map(([key, value]) => { const v = Math.max(0, Math.min(100, value)); return <span key={key}><small>{componentLabels[key as keyof typeof componentLabels]}</small><b>{Math.round(v)}</b><i><em style={{ width: `${Math.min(100, v)}%` }} /></i></span>; })}</div><footer><span>Wyczerpanie wojenne <b>{Math.round(selectedDossier.strength.exhaustion)}%</b></span><span>Integracja zdobyczy <b>{Math.round(selectedDossier.strength.integration)}%</b></span></footer></section>
               {selectedDossier.capabilityChanges.length > 0 && <section className="capability-changes"><header><b>ZMIANY POTENCJAŁU</b> <span>ostatnia tura</span></header><div>{selectedDossier.capabilityChanges.map((item) => <span key={item.key} className={`capability-change ${item.trend}`}><small>{item.label}</small><b>{item.value}</b><strong>{item.delta}</strong></span>)}</div><footer><span>Niepewność wywiadu <b>{Math.round((engine?.getCountryCapabilityState(selectedDossier.countryId)?.uncertainty ?? 0) * 100)}%</b></span><span>Każdy wskaźnik zmienia się w własnym tempie.</span></footer></section>}
               <section className="dossier-stats"><div><span>Sektory</span><b>{selectedDossier.regions.length}</b></div><div><span>Prowincje</span><b>{selectedDossier.provinceCount}</b></div><div><span>Ofensywy</span><b>{selectedDossier.outgoing.length}</b></div><div><span>Obrona</span><b>{selectedDossier.incoming.length}</b></div></section>
               {selectedDossier.assessment && <section className={`war-assessment ${selectedDossier.assessment.level}`}><small>TWOJA OFENSYWA PRZECIW TEMU KRAJOWI</small><strong>{selectedDossier.assessment.label}</strong><div><i style={{ width: `${selectedDossier.assessment.chance}%` }} /></div><p>Szansa powodzenia: <b>{selectedDossier.assessment.chance}%</b>. Obrona własnego regionu daje przeciwnikowi +15%; {selectedDossier.assessment.front.attackerFronts > 1 ? `Twoje ${selectedDossier.assessment.front.attackerFronts} fronty rozpraszają siły.` : "nie masz kary za wiele frontów."} Każdy kwartał zawiera jawny czynnik losowy.</p></section>}
