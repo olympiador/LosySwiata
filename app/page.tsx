@@ -113,6 +113,17 @@ const stageLabels: Record<TurnStage, string> = {
   size: "LOSUJ WIELKOŚĆ",
   apply: "WYKONAJ AKCJĘ",
 };
+type DossierTab = "overview" | "economy" | "population" | "military" | "logistics" | "policies";
+const PLAYER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics", "policies"];
+const OBSERVER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics"];
+const tabLabels: Record<DossierTab, string> = {
+  overview: "Przegląd",
+  economy: "Gospodarka",
+  population: "Ludność",
+  military: "Wojsko",
+  logistics: "Logistyka",
+  policies: "Polityka",
+};
 
 function wait(ms: number) { return new Promise((resolve) => window.setTimeout(resolve, ms)); }
 
