@@ -1983,6 +1983,7 @@ export class WorldEngine {
     const region = targetRegionId !== undefined ? owned.find((r) => r.id === targetRegionId) : owned.sort((a, b) => b.areaKm2 - a.areaKm2 || a.id - b.id)[0];
     if (!region) return;
     if (policyId === "build-port" && region.maritimeAccess <= 0) return;
+    if (policyId === "expand-airport" && !region) return;
     let type: LogisticsInvestment["type"] | null = null;
     let bonus = 0;
     switch (policyId) {
@@ -2023,6 +2024,12 @@ export class WorldEngine {
     this.playerPolicyState.activePolicies = this.playerPolicyState.activePolicies.filter((policy) => {
       if (!policy.duration) return true;
       return policy.lastUsedTurn + policy.duration > this.turn;
+    });
+    const state = this.countryCapabilityStates[this.playerCountryId];
+    if (!state?.logisticsInvestments.length) return;
+    state.logisticsInvestments = state.logisticsInvestments.filter((inv) => {
+      if (inv.remainingTurns > 1) { inv.remainingTurns -= 1; return true; }
+      return false;
     });
   }
 
