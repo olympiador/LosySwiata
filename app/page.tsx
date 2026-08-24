@@ -1053,7 +1053,6 @@ export default function Home() {
             }
             return country.id;
           });
-          focusCountry(country.id);
         }
       }
     }
