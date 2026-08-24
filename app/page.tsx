@@ -223,6 +223,8 @@ export default function Home() {
   const [capitalDisplay, setCapitalDisplay] = useState<CapitalDisplay>("labels");
   const [mapLabels, setMapLabels] = useState<CountryLabelPlacement[]>([]);
   const [animationMode, setAnimationMode] = useState<AnimationMode>("full");
+  const [dossierTab, setDossierTab] = useState<DossierTab>("overview");
+  const [dossierMode, setDossierMode] = useState<"country" | "sector">("country");
   const [battleFx, setBattleFx] = useState<BattleFx | null>(null);
   const [seedInput, setSeedInput] = useState("");
   const [microstateRule, setMicrostateRule] = useState<MicrostateRule>("all");
@@ -1311,6 +1313,7 @@ export default function Home() {
             <span className="zoom-hint">Rozsuń palce · przeciągnij</span>
             {selectedDossier && selected && <aside className="country-dossier" aria-label={`Informacje o państwie ${selected.country.name}`}>
               <header><span>{selected.country.flag}</span><div><small>{selectedDossier.countryId === playerCountryId ? "TWOJE PAŃSTWO" : "KARTA PAŃSTWA"}</small><h2>{selected.country.name}</h2><em>{formatArea(selected.area)}</em></div><button onClick={() => setSelectedId(null)} aria-label="Zamknij kartę państwa">×</button></header>
+              <nav className="dossier-tabs">{(selectedDossier.countryId === playerCountryId ? PLAYER_TABS : OBSERVER_TABS).map((tab) => <button key={tab} className={dossierTab === tab ? "active" : ""} onClick={() => setDossierTab(tab)}>{tabLabels[tab]}</button>)}</nav>
               <section className="dossier-strength"><div><small>POTENCJAŁ</small><strong>{selectedDossier.strength.rating}<i>/100</i></strong><em>{selectedDossier.strength.tier}</em></div><div><small>RANKING POTENCJAŁU</small><strong>#{selectedDossier.strength.rank || "—"}</strong><em>z {selectedDossier.strength.activeCountries}</em></div><div><small>WYNIK MODELU</small><strong>{Math.round(selectedDossier.strength.power)}</strong><em>baza 2021 + stan gry</em></div></section>
               <section className="capacity-breakdown"><header><b>MOŻLIWOŚCI PAŃSTWA</b><span>0–100</span></header><div>{Object.entries(selectedDossier.strength.components).map(([key, value]) => { const v = Math.max(0, Math.min(100, value)); return <span key={key}><small>{componentLabels[key as keyof typeof componentLabels]}</small><b>{Math.round(v)}</b><i><em style={{ width: `${Math.min(100, v)}%` }} /></i></span>; })}</div><footer><span>Wyczerpanie wojenne <b>{Math.round(selectedDossier.strength.exhaustion)}%</b></span><span>Integracja zdobyczy <b>{Math.round(selectedDossier.strength.integration)}%</b></span></footer></section>
               {selectedDossier.capabilityChanges.length > 0 && <section className="capability-changes"><header><b>ZMIANY POTENCJAŁU</b> <span>ostatnia tura</span></header><div>{selectedDossier.capabilityChanges.map((item) => <span key={item.key} className={`capability-change ${item.trend}`}><small>{item.label}</small><b>{item.value}</b><strong>{item.delta}</strong></span>)}</div><footer><span>Niepewność wywiadu <b>{Math.round((engine?.getCountryCapabilityState(selectedDossier.countryId)?.uncertainty ?? 0) * 100)}%</b></span><span>Każdy wskaźnik zmienia się w własnym tempie.</span></footer></section>}
