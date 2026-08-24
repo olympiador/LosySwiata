@@ -366,7 +366,7 @@ export function evaluateCapabilityChange(
     economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty),
     population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty),
     technology: clamp((baseline.technology - state.components.technology) * 0.03 + (context.hasOutgoing ? -0.08 : 0.03) - sanctionsPenalty * 0.05),
-    logistics: clamp((countryLogistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0) + (context.policyEffects?.logisticsBonus ?? 0)),
+    logistics: clamp((countryLogistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0)),
     military: clamp((baseline.military - state.components.military) * 0.06 + (context.hasOutgoing ? 0.3 : -0.05) + (context.hasIncoming ? 0.1 : 0) + cliff.manpowerPenalty * 0.5),
     stability: clamp((baseline.stability - state.components.stability) * 0.03 + (context.hasIncoming ? -0.3 : 0.05) + occupationLoad * 0.5 + warIntensity * -0.05 + cliff.stabilityPenalty + (state.assimilationProgress < 30 ? -0.01 : 0)),
   };
