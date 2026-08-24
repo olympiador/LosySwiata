@@ -642,7 +642,7 @@ export class WorldEngine {
   private capabilityChangedThisTurn = false;
   private highlightOutlineKey = "";
   private highlightOutline: Path2D | null = null;
-  private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 0, lastDecisionTurn: 0 };
+  private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 1, lastDecisionTurn: 0 };
 
   private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0)) {
     this.countries = countries;
