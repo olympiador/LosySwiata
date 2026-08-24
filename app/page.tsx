@@ -1038,12 +1038,22 @@ export default function Home() {
         selectStrategicTarget(region.id);
         choseAttackTarget = true;
       }
-      // Selecting an attackable province consumes the tap. Previously the same
-      // tap continued into country inspection, opened the defender's dossier
-      // and moved the camera away from the player's front.
+      // attackable targets keep the old behavior: only selection, no dossier opening
       if (!choseAttackTarget) {
         const country = countryAtPointer(event);
-        if (country) { setSelectedId(country.id); focusCountry(country.id); }
+        if (country) {
+          setSelectedId((current) => {
+            if (current === country.id) {
+              setDossierMode("sector");
+              setDossierTab("overview");
+            } else {
+              setDossierMode("country");
+              setDossierTab("overview");
+            }
+            return country.id;
+          });
+          focusCountry(country.id);
+        }
       }
     }
     if (gesture.points.size === 1) {
@@ -1279,6 +1289,7 @@ export default function Home() {
               onPointerLeave={() => setHover(null)}
               onWheel={wheelZoom}
               onDoubleClick={() => zoomBy(1.25)}
+              onContextMenu={(event) => { event.preventDefault(); setSelectedId(null); }}
             />
             <canvas
               ref={outlineRef}
