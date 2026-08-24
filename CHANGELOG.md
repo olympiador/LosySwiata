@@ -6,7 +6,10 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl-PL/1.0.0/).
 ## [0.3.0] - 2026-08-23
 
 ### Dodane
-- deterministyczny model demograficzny: 6 grup wiekowych, typy piramid według Zeihana
+- automatyczna logistyka per region: dostęp morski, kolej, drogi, lotniska, rzeki
+- karty decyzyjne inwestycyjne: budowa portu, modernizacja dróg/kolei, rozbudowa lotniska
+- UI logistyki w panelu kraju: indeks krajowy i szczegóły regionów
+- karty decyzyjne dostępne i użyteczne: wybór regionu, warunki dostępności, aktywne inwestycje
 - konsumpcja napędzana przez wiek: primeAge/youth podnoszą gospodarkę, elderly/veryOld obniżają
 - kultura i asymilacja: bliskość kulturowa wpływa na szybkość integracji okupowanych regionów
 - uchodźcy wojenni: przepływ ludności z krajów atakowanych, efekty gospodarcze i stabilności

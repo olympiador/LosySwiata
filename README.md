@@ -27,9 +27,10 @@ Wszystkie zmiany są deterministyczne: każda wartość zmienia się tylko z prz
 - Terytorialne zyski: +5 stabilności przez 8 kwartałów, 50% zanik co 2 kwartały po wygaśnięciu.
 
 ### Logistyka
-- Obrażenia zależne od intensywności wojny, technologii i wielkości terytorium.
-- Odbudowa zależna od gospodarki i logistyki.
-- Okupacje obciążają logistykę o 10% każda.
+- Logistyka jest liczona per region na podstawie heurystyki z danych mapy: dostęp morski, kolej, drogi, lotniska, rzeki.
+- Wartość krajowa to średnia z regionów.
+- Wpływa na gospodarkę i manpower: <30 gospodarka -0.05/tk, <40 manpower -0.02/tk, >80 gospodarka +0.03/tk.
+- Gracz może inwestować w infrastrukturę: budowa portu, modernizacja dróg/kolei, rozbudowa lotniska.
 
 ### Populacja i technologia
 - Wyższa technologia zmniejsza przyrost naturalny: model przejścia demograficznego.

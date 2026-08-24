@@ -93,48 +93,35 @@ Stany mobilizacji:
 - open: 1.1–1.25
 - full: 1.35
 
-## 8. Logistyka — szczegółowy model
+## 8. Logistyka — model regionalny
 
-### Składowe
-- Base logistics: wartość z baseline
-- Regional modifiers: port +5, przylądek +3, region przygraniczny +2, górski -3, wyspowy -5, okupowany -10/-20
-- War damage: zależne od intensywności wojny i technologii
-- Recovery: zależne od gospodarki i logistyki
-- Occupation penalty: -0.1/turę za każdą okupację
+Logistyka nie jest już jednym krajowym bonusem. Każdy region ma własny indeks 0–100, a wartość krajowa to średnia ważona regionów. Indeks wpływa na gospodarkę, manpower i kampanie wojenne.
 
-### Intensywność wojny
-```
-warIntensity = sum(
-  kampanie ofensywne: +0.3 każda
-  kampanie defensywne: +0.6 każda
-  okupacje: +0.2 każda
-)
-clamp(warIntensity, 0, 1)
-```
+### 8.1 Składowe regionalne (heurystyka z danych mapy)
+- dostęp morski: 30%
+- gęstość sieci kolejowej: 25%
+- gęstość dróg: 25%
+- lotniska: 15%
+- rzeki: 5%
 
-### Obrażenia
-```
-damage = warIntensity * (1 + technology / 100 * 0.3)
-```
+Heurystyka obliczana w `computeRegionLogisticsFromMap()`:
+- `maritimeAccess`: 70 jeśli region ma wybrzeże, inaczej 0
+- `railDensity`: 0.7 dla dużych regionów (>20 000 km²), 0.35 dla reszty
+- `roadDensity`: 0.5 bazowo
+- `airportCount`: 1 jeśli region ma stolicę, inaczej 0
+- `riverAccess`: 0
 
-### Odbudowa
-```
-recovery = economy * 0.03 + logistics * 0.05
-```
+### 8.2 Karty decyzyjne inwestycyjne
+Gracz może inwestować w infrastrukturę za punkty decyzyjne:
+- Budowa portu: +20 logistyki, koszt 2 PD, 8 kwartałów
+- Modernizacja dróg: +10 logistyki, koszt 1 PD, 4 kwartały
+- Rozbudowa lotniska: +12 logistyki, koszt 1 PD, 6 kwartałów
+- Modernizacja kolei: +15 logistyki, koszt 1 PD, 6 kwartałów
 
-### Pełna formuła
-```
-delta_logistics = clamp(
-  (baseline - current) * 0.04 + recovery - damage - occupationPenalty,
-  -0.4,
-  0.3
-)
-```
-
-### Odbudowa po wojnie
-Jeśli brak wojny przez 2+ kwartały:
-- recovery = economy * 0.05 + logistics * 0.08 (2x normalna)
-- regression = (baseline - current) * 0.02
+### 8.3 Wpływ na inne wskaźniki
+- logistyka <30 → gospodarka -0.05/tk
+- logistyka >80 → gospodarka +0.03/tk
+- logistyka <40 → manpower -0.02/tk
 
 ## 9. Gospodarka — deterministyczny model
 
