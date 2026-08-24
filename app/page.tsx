@@ -113,9 +113,9 @@ const stageLabels: Record<TurnStage, string> = {
   size: "LOSUJ WIELKOŚĆ",
   apply: "WYKONAJ AKCJĘ",
 };
-type DossierTab = "overview" | "economy" | "population" | "military" | "logistics" | "policies";
-const PLAYER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics", "policies"];
-const OBSERVER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics"];
+type DossierTab = "overview" | "economy" | "population" | "military" | "logistics" | "policies" | "sector";
+const PLAYER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics", "policies", "sector"];
+const OBSERVER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics", "sector"];
 const tabLabels: Record<DossierTab, string> = {
   overview: "Przegląd",
   economy: "Gospodarka",
@@ -123,6 +123,7 @@ const tabLabels: Record<DossierTab, string> = {
   military: "Wojsko",
   logistics: "Logistyka",
   policies: "Polityka",
+  sector: "Sektor",
 };
 
 function wait(ms: number) { return new Promise((resolve) => window.setTimeout(resolve, ms)); }
@@ -1333,6 +1334,7 @@ export default function Home() {
               {selectedDossier.attackableRegions.length > 0 && <section className="dossier-targets"><header><b>DOSTĘPNE CELE</b><span>{selectedDossier.attackableRegions.length}</span></header>{selectedDossier.attackableRegions.map((region) => <button key={region.id} disabled={Boolean(playerCampaign)} onClick={() => selectStrategicTarget(region.id)}><span>{region.name}</span><b>{formatArea(region.areaKm2)}</b><i>WYBIERZ I POKAŻ →</i></button>)}</section>}
               <section className="dossier-regions"><header><b>KONTROLOWANE SEKTORY</b><span>{selectedDossier.regions.length}</span></header><div>{selectedDossier.regions.slice(0, 8).map((region) => <button key={region.id} className={inspectedSectorId === region.id ? "active" : ""} onClick={() => { setInspectedSectorId(region.id); highlightRef.current = engine?.getStrategicRegionIndices(region.id) ?? []; paint(); }}><span>{region.name}</span><b>{region.provinceCount} prow. · {formatArea(region.areaKm2)}</b></button>)}</div>{selectedDossier.regions.length > 8 && <small>oraz {selectedDossier.regions.length - 8} kolejnych sektorów</small>}</section>
               {inspectedSectorId !== null && strategicRegions[inspectedSectorId]?.ownerId === selectedDossier.countryId && <section className="sector-composition"><header><b>SKŁAD SEKTORA</b><span>{strategicRegions[inspectedSectorId].provinceCount}</span></header><strong>{strategicRegions[inspectedSectorId].name}</strong><p>{strategicRegions[inspectedSectorId].provinceNames.join(" · ")}</p></section>}
+              {dossierMode === "sector" && inspectedSectorId !== null && (() => { const sector = strategicRegions[inspectedSectorId]; const ownerId = sector?.ownerId ?? selectedDossier.countryId; const owner = engine?.getCountry(ownerId); const regionLogistics = engine?.getRegionLogistics(inspectedSectorId); return <section className="sector-detail"><header><b>{sector?.name ?? `Sektor ${inspectedSectorId}`}</b><span>{owner?.flag} {owner?.name ?? "—"}</span></header><div><span><small>Prowincje</small><b>{sector?.provinceCount ?? 0}</b></span><span><small>Powierzchnia</small><b>{formatArea(sector?.areaKm2 ?? 0)}</b></span><span><small>Logistyka</small><b>{typeof regionLogistics === "number" ? Math.round(regionLogistics) : "—"}</b></span></div><footer>{sector?.provinceNames.length ? <p>{sector.provinceNames.join(" · ")}</p> : <small>Brak danych o prowincjach.</small>}</footer></section>; })()}
             </aside>}
             {hover && <div className="map-tooltip" style={{ left: hover.x, top: hover.y }}><span>{hover.country.flag}</span><strong>{hover.country.name}</strong></div>}
             {last && <div className={`event-ribbon ${last.action}`}><span>{actionIcons[last.action]}</span><p>{last.text}</p><b>{last.directionShort}</b></div>}
