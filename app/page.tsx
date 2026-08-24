@@ -1137,6 +1137,7 @@ export default function Home() {
       occupation: strategicOccupations.find(({ regionId, ownerId }) => regionId === region.id && ownerId === region.ownerId),
     };
   }, [engine, playerCountryId, strategicOccupations, strategicRegions, strategicTargetId]);
+  const playerOccupations = useMemo(() => playerCountryId === null ? [] : strategicOccupations.filter(({ ownerId, progress }) => ownerId === playerCountryId && progress < 100), [playerCountryId, strategicOccupations]);
   const selectedDossier = useMemo(() => {
     if (!engine || gameMode !== "strategy" || !selected) return null;
     const countryId = selected.country.id;
@@ -1163,8 +1164,7 @@ export default function Home() {
     const assimilationProgress = playerOccupations.find(o => strategicRegions[o.regionId]?.ownerId === countryId)?.progress ?? 0;
     const playerPolicyState = playerCountryId === countryId ? engine.getPlayerPolicyState() : null;
     return { countryId, regions, provinceCount, strength, outgoing, incoming, occupations, attackableRegions, assessment, capabilityChanges, manpower, countryLogistics, regionLogistics, regimeType, informationEnvironment, combatExperience, demographics, demographicType, populationAbsolute, refugeesHosted, borderPolicy, assimilationProgress, playerPolicyState };
-  }, [engine, gameMode, playerCountryId, selected, strategicCampaigns, strategicOccupations, strategicRegions, strategicTargets, dataVersion]);
-  const playerOccupations = useMemo(() => playerCountryId === null ? [] : strategicOccupations.filter(({ ownerId, progress }) => ownerId === playerCountryId && progress < 100), [playerCountryId, strategicOccupations]);
+  }, [engine, gameMode, playerCountryId, selected, strategicCampaigns, strategicOccupations, strategicRegions, strategicTargets, dataVersion, playerOccupations]);
   const changeDefensePosture = useCallback((posture: StrategicDefensePosture, focusRegionId: number | null = null) => {
     if (!engine || busy) return;
     const selectedFocus = posture === "sector" ? focusRegionId ?? incomingCampaigns[0]?.regionId ?? null : null;
