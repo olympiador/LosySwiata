@@ -1025,7 +1025,7 @@ export default function Home() {
       if (gesture.points.size === 1) {
         const dx = current.x - previous.x, dy = current.y - previous.y;
         if (Math.abs(dx) + Math.abs(dy) > 1) gesture.moved = true;
-        if (zoomRef.current > 0.85) applyView(zoomRef.current, { x: panRef.current.x + dx, y: panRef.current.y + dy });
+        if (zoomRef.current >= MIN_ZOOM) applyView(zoomRef.current, { x: panRef.current.x + dx, y: panRef.current.y + dy });
         gesture.last = current;
       } else if (gesture.pinch) {
         const [first, second] = [...gesture.points.values()];
@@ -1398,7 +1398,6 @@ export default function Home() {
 
         <aside className="controls">
           <header className="control-heading"><div><span className="eyebrow">{gameMode === "war" ? "WAR ONLY" : gameMode === "strategy" ? "TRYB STRATEGICZNY" : "TRYB PEŁNY"} · {gameRegion ? regionLabels[gameRegion].toUpperCase() : "CAŁY ŚWIAT"} · {gameMode === "strategy" ? strategicDate(turn + 1).toUpperCase() : `TURA ${turn + 1} · KROK ${stageOrder.indexOf(stage) + 1} Z 5`}</span><h2>{gameMode === "strategy" ? "Dowództwo państwa" : "Koła losujące"}</h2></div><div className="speed">{[1, 2, 4, 8].map((value) => <button key={value} className={speed === value ? "active" : ""} onClick={() => setSpeed(value)}>{value}×</button>)}</div></header>
-          <button className="current-seed" disabled={!engine} title="Kliknij, aby skopiować seed tej rozgrywki" onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}><span>SEED TEGO ŚWIATA</span><b>{engine?.seed ?? "—"}</b><i>⧉ KOPIUJ</i></button>
           {gameMode === "strategy" ? <div className="strategy-command" aria-live="polite">
             <button className="strategy-round" disabled={!ready || busy || !playerCountry || Boolean(playerCampaignConflict)} onClick={() => void runStrategicRound()}>{busy ? "AI rozgrywa kwartał…" : playerCampaignConflict ? "Najpierw zdecyduj o kampanii" : playerCampaign ? "Kontynuuj kampanię i rozegraj kwartał" : strategicTargetId === null ? "Rozegraj kwartał bez wojny" : "Rozpocznij kampanię i rozegraj kwartał"}</button>
             <div className="strategy-player">
