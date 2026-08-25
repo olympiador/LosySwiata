@@ -1826,12 +1826,13 @@ export class WorldEngine {
         let target: StrategicRegion | undefined;
         if (actor.id === this.playerCountryId) target = targets.find(({ id }) => id === playerTargetRegionId);
         else {
+          if (this.turn <= 2) continue;
           // The opening diplomatic window prevents a dog-pile before the
           // player has made a meaningful decision. Afterwards a weak state
           // can face one foreign front and a major power at most two.
           if (this.playerCountryId !== null) {
             const policy = this.getPlayerDefensePolicy();
-            if (this.turn <= 2 || (policy?.activeIncoming ?? 0) >= (policy?.maxIncoming ?? 1)) {
+            if ((policy?.activeIncoming ?? 0) >= (policy?.maxIncoming ?? 1)) {
               targets = targets.filter(({ ownerId }) => ownerId !== this.playerCountryId);
             }
           }
