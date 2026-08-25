@@ -7,7 +7,37 @@ const SW_PATH = "/sw.js";
 function useServiceWorker() {
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register(SW_PATH).catch(() => {});
+    const dev = ['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(location.hostname);
+    if (!dev) {
+      navigator.serviceWorker.register(SW_PATH).catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'UPDATE_AVAILABLE') {
+        window.location.reload();
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    const dev = ['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(location.hostname);
+    if (dev) return;
+    const id = window.setInterval(() => {
+      navigator.serviceWorker.ready.then((registration) => {
+        if (registration.active && 'postMessage' in registration.active) {
+          registration.active.postMessage({ type: 'CHECK_UPDATE' });
+        }
+      }).catch(() => {});
+    }, 60000);
+    return () => window.clearInterval(id);
   }, []);
 }
 import {
