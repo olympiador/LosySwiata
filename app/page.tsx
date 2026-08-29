@@ -144,8 +144,8 @@ const stageLabels: Record<TurnStage, string> = {
   apply: "WYKONAJ AKCJĘ",
 };
 type DossierTab = "overview" | "economy" | "population" | "military" | "logistics" | "policies" | "sector";
-const PLAYER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics", "policies", "sector"];
-const OBSERVER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics", "sector"];
+const PLAYER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics", "policies"];
+const OBSERVER_TABS: DossierTab[] = ["overview", "economy", "population", "military", "logistics"];
 const tabLabels: Record<DossierTab, string> = {
   overview: "Przegląd",
   economy: "Gospodarka",

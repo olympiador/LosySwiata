@@ -187,12 +187,17 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       military: 18 + ((country.id * 311.4) % 34),
       stability: 22 + ((country.id * 73.9) % 30),
     };
-    const components = calibrated
+    const components = { ...(calibrated
       ? { economy: clamp(calibrated.economy ?? fallback.economy), population: clamp((calibrated.populationAbsolute ?? 0) / 1_000_000), technology: clamp(calibrated.technology ?? fallback.technology), logistics: clamp(calibrated.logistics ?? fallback.logistics), military: clamp(calibrated.military ?? fallback.military), stability: clamp(calibrated.stability ?? fallback.stability) }
-      : { ...fallback, stability: clamp(fallback.stability) };
+      : { ...fallback, stability: clamp(fallback.stability) }) };
     const regimeType = calibrated?.regimeType ?? initialRegimeType(country.id);
     const informationEnvironment = calibrated?.informationEnvironment ?? initialInformationEnvironment(country.id);
-    const populationAbsolute = calibrated?.populationAbsolute ?? components.population * 1_000_000;
+    let populationAbsolute = calibrated?.populationAbsolute ?? components.population * 1_000_000;
+    if (!calibrated && components.population > 45) {
+      const fallbackPop = 1_000_000 + ((country.id * 251.17) % 35) * 1_000_000;
+      components.population = clamp(fallbackPop / 1_000_000, 0, 45);
+      populationAbsolute = components.population * 1_000_000;
+    }
     const demographics = defaultPyramid();
     const culturalProximity = defaultProximity();
     return {
