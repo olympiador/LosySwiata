@@ -58,10 +58,11 @@ export type StrategicRegion = {
 };
 
 export type LogisticsInvestment = {
+  id: string;
   regionId: number;
   type: "port" | "road" | "rail" | "airport";
-  startedTurn: number;
-  duration: number;
+  bonus: number;
+  remainingTurns: number;
 };
 
 export type StrategicCampaign = {

@@ -405,7 +405,7 @@ export function evaluateCapabilityChange(
   const refugeeFlow = refugeeFlowFrom(warIntensity, immigrationPolicy);
   const populationScale = state.populationAbsolute > 0 ? state.populationAbsolute : state.components.population * 1_000_000;
   const { state: postRefugeeState, refugeesIn } = applyRefugeeFlow(state, populationScale > 0 ? refugeeFlow : 0);
-  const assimilationRateValue = assimilationRate(state.culturalProximity[context.activeOccupations] ?? 0.15, regimeType);
+  const assimilationRateValue = assimilationRate(0.15, regimeType);
   const postAssimilationState = applyAssimilation(postRefugeeState, context.activeOccupations > 0 ? assimilationRateValue : 0);
   const assimilationBonus = postAssimilationState.assimilationProgress >= 100 ? { economyBonus: 5, logisticsBonus: 3, stabilityBonus: 2 } : { economyBonus: 0, logisticsBonus: 0, stabilityBonus: 0 };
   const updated = {
@@ -423,15 +423,18 @@ export function evaluateCapabilityChange(
     regimeType,
     informationEnvironment,
     combatExperience: clamp(state.combatExperience + (policy.combatExperienceChange ?? 0)),
-    manpower: { available: Math.max(0, Math.round((populationScale / 1_000_000) * 0.22 * mobilizationMultiplier)), active: Math.min(activeManpower, Math.max(0, Math.round((populationScale / 1_000_000) * 0.22 * mobilizationMultiplier))), reserves: Math.max(0, Math.round((populationScale / 1_000_000) * 0.12 - activeManpower)), mobilization, maintenanceCost },
+    manpower: { available: Math.max(0, Math.round((populationScale / 1_000_000) * 0.22 * mobilizationMultiplier)), active: Math.min(activeManpower, Math.max(0, Math.round((populationScale / 1_000_000) * 0.22 * mobilizationMultiplier))), reserves: Math.max(0, Math.round((populationScale / 1_000_000) * 0.22 * mobilizationMultiplier - activeManpower)), mobilization, maintenanceCost },
     demographics: postAssimilationState.demographics,
     demographicType: demographicType(postAssimilationState.demographics),
     borderPolicy: immigrationPolicy,
-    logisticsInvestments: state.logisticsInvestments.map((inv) => ({ ...inv, remainingTurns: Math.max(0, inv.remainingTurns - 1) })),
+    // Czas trwania inwestycji odlicza silnik w advancePlayerPolicies().
+    // Nie robimy tego tutaj drugi raz, bo aktualizacja zdolności państwa
+    // następuje w tej samej turze.
+    logisticsInvestments: state.logisticsInvestments.map((inv) => ({ ...inv })),
     culturalProximity: state.culturalProximity,
     assimilationProgress: postAssimilationState.assimilationProgress,
-    refugeesHosted: postRefugeeState.refugeesHosted + (populationScale > 0 ? populationScale * refugeeFlow * 0.3 : 0),
-    populationAbsolute: postRefugeeState.populationAbsolute + (immigrationEffects.populationDelta * 1_000_000),
+    refugeesHosted: postRefugeeState.refugeesHosted,
+    populationAbsolute: postRefugeeState.populationAbsolute,
   };
   return updated;
 }
@@ -456,11 +459,13 @@ export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, P
 }
 
 export function capabilityStateToSnapshotArray(state: CountryCapabilityState): number[] {
+  const regimeIndex = state.regimeType === "democracy" ? 0 : state.regimeType === "authoritarian" ? 1 : 2;
   return [
     state.components.economy, state.components.population, state.components.technology, state.components.logistics, state.components.military, state.components.stability,
     state.informationEnvironment.score, state.combatExperience,
     state.manpower.available, state.manpower.active, state.manpower.reserves,
     state.populationAbsolute, state.assimilationProgress, state.refugeesHosted,
+    regimeIndex,
   ];
 }
 
@@ -469,13 +474,18 @@ export function loadCapabilityStatesFromSnapshot(countries: Country[], entries: 
   if (!entries?.length) return defaults;
   return entries.map((entry, index) => {
     const country = countries[index];
-    if (!entry || entry.length < 8 || !country) return defaults[index] ?? defaultInitialCountryCapabilityState();
+    const fallback = defaults[index] ?? defaultInitialCountryCapabilityState();
+    // Zapisy sprzed dodania ustroju mają 14 pól. Zachowują wszystkie
+    // istniejące wartości, a brakujący ustrój odziedziczają z bazowego kraju.
+    if (!entry || entry.length < 8 || !country) return fallback;
     return {
       components: { economy: clamp(entry[0] ?? 0), population: clamp(entry[1] ?? 0), technology: clamp(entry[2] ?? 0), logistics: clamp(entry[3] ?? 0), military: clamp(entry[4] ?? 0), stability: clamp(entry[5] ?? 0) },
       uncertainty: 0.18,
       lastEvaluatedTurn: 0,
       change: { economy: 0, population: 0, technology: 0, logistics: 0, military: 0, stability: 0 },
-      regimeType: "democracy",
+      regimeType: entry.length >= 15
+        ? (["democracy", "authoritarian", "totalitarian"] as RegimeType[])[entry[14] ?? 0] ?? fallback.regimeType
+        : fallback.regimeType,
       informationEnvironment: { score: clamp(entry[6] ?? 45), techComponent: 50, mediaControl: 30, servicesStrength: 35 },
       combatExperience: clamp(entry[7] ?? 0, 0, 25),
       manpower: { available: clamp(entry[8] ?? 0, 0, 200), active: clamp(entry[9] ?? 0, 0, 100), reserves: clamp(entry[10] ?? 0, 0, 200), mobilization: "hidden", maintenanceCost: 0 },

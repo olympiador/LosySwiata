@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { inflateSync } from "node:zlib";
 import { assignCrimeaToUkraine, circularColumnSpan, classifyGameRegion, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
+import { evaluateCapabilityChange, initialCapabilityStates, loadCapabilityStatesFromSnapshot } from "../app/country-capability";
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_ISO, ADMIN1_NAMES } from "../app/admin1-data";
 import { CAPITALS } from "../app/capital-data";
 
@@ -48,6 +49,27 @@ test("continent classification separates North, Central and South America", () =
   assert.equal(classifyGameRegion("CU", "Americas", "Caribbean"), "central_america_caribbean");
   assert.equal(classifyGameRegion("BR", "Americas", "South America"), "south_america");
   assert.equal(classifyGameRegion("RU", "Europe", "Eastern Europe"), "asia_oceania");
+});
+
+test("legacy capability saves keep their progress and original regime", () => {
+  const saved = [[61, 27, 46, 52, 70, 63, 74, 9, 32, 17, 15, 144_000_000, 18, 2_000]];
+  const restored = loadCapabilityStatesFromSnapshot([{ ...countries[0], iso: "RU", iso3: "RUS" }], saved);
+  assert.equal(restored[0].components.economy, 61);
+  assert.equal(restored[0].components.military, 70);
+  assert.equal(restored[0].populationAbsolute, 144_000_000);
+  assert.equal(restored[0].regimeType, "authoritarian");
+});
+
+test("capability evaluation does not shorten logistics investments a second time", () => {
+  const [state] = initialCapabilityStates(countries);
+  state.logisticsInvestments = [{ id: "roads-1", regionId: 0, type: "road", bonus: 10, remainingTurns: 4 }];
+  const updated = evaluateCapabilityChange(state, state.components, {
+    hasIncoming: false,
+    hasOutgoing: false,
+    activeOccupations: 0,
+    areaShare: 1,
+  }, 1, 1);
+  assert.equal(updated.logisticsInvestments[0]?.remainingTurns, 4);
 });
 
 test("map picking wraps horizontally like a cylinder", () => {

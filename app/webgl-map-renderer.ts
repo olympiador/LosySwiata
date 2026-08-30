@@ -244,7 +244,7 @@ export class WebGLMapRenderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
   }
 
-  upload(map: HTMLCanvasElement, outline: HTMLCanvasElement, identity?: HTMLCanvasElement, administrative?: HTMLCanvasElement) {
+  upload(map: HTMLCanvasElement, outline: HTMLCanvasElement, identity?: HTMLCanvasElement, administrative?: HTMLCanvasElement, preprojected?: boolean) {
     this.uploadTexture(0, this.mapTexture, map);
     this.uploadTexture(1, this.outlineTexture, outline);
     if (identity) this.uploadTexture(2, this.identityTexture, identity, true);
@@ -305,7 +305,7 @@ class Canvas2DMapRenderer implements MapRenderer {
     }
     const worldWidth = width * zoom, worldHeight = height * zoom;
     const originX = width / 2 + panX * width - worldWidth / 2;
-    const originY = height / 2 - panY * height - worldHeight / 2;
+    const originY = height / 2 + panY * height - worldHeight / 2;
     context.clearRect(0, 0, width, height);
     context.imageSmoothingEnabled = zoom < 8;
     const firstWrap = Math.floor((-originX - worldWidth) / worldWidth);
