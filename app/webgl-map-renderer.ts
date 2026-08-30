@@ -165,9 +165,9 @@ void main() {
   // Focus is communicated by a gentle warm wash over the whole sector and a
   // A restrained steel-blue focus is visible over every political colour
   // without a broad glow or the former alarm-like red outline.
-  if (targetSelected) colour = mix(colour, vec3(.35, .67, .82), .10);
-  if (targetFocusEdge) colour = mix(colour, vec3(.06, .16, .21), .90);
-  if (targetBoundary) colour = mix(colour, vec3(.88, .96, 1.0), .96);
+  if (targetSelected) colour = mix(colour, vec3(.02, .72, .86), .18);
+  if (targetFocusEdge) colour = mix(colour, vec3(.02, .88, .92), .94);
+  if (targetBoundary) colour = mix(colour, vec3(.93, 1.0, 1.0), 1.0);
   outColor = vec4(colour, 1.0);
 }`;
 
