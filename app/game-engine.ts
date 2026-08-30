@@ -6,6 +6,7 @@ import worldCountries from "world-countries";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_HEIGHT, ADMIN1_ISO, ADMIN1_NAMES, ADMIN1_WIDTH } from "./admin1-data";
 import { ELEVATION_HEIGHT, ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH } from "./elevation-data";
+import { REAL_AIRPORTS_DEFLATE_BASE64 } from "./airport-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
 import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
@@ -508,6 +509,7 @@ function heapPop<T extends PriorityItem>(heap: T[]) {
 }
 
 let elevationPromise: Promise<Uint16Array> | null = null;
+let airportPromise: Promise<Uint16Array> | null = null;
 let admin1Promise: Promise<Int16Array> | null = null;
 
 function loadAdmin1() {
@@ -562,6 +564,21 @@ function loadElevation() {
     }
   })();
   return elevationPromise;
+}
+
+function loadAirports() {
+  if (airportPromise) return airportPromise;
+  airportPromise = (async () => {
+    try {
+      const binary = atob(REAL_AIRPORTS_DEFLATE_BASE64);
+      const compressed = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index++) compressed[index] = binary.charCodeAt(index);
+      const stream = new Blob([compressed.buffer]).stream().pipeThrough(new DecompressionStream("deflate"));
+      const source = await new Response(stream).arrayBuffer();
+      return new Uint16Array(source);
+    } catch { return new Uint16Array(0); }
+  })();
+  return airportPromise;
 }
 
 export class WorldEngine {
@@ -645,7 +662,7 @@ export class WorldEngine {
   private highlightOutline: Path2D | null = null;
   private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 1, lastDecisionTurn: 0 };
 
-  private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0)) {
+  private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0)) {
     this.countries = countries;
     this.owners = owners;
     this.initialOwners = owners.slice();
@@ -857,7 +874,8 @@ export class WorldEngine {
     separateCountriesByWater(owners, countries, "DK", "SE");
     assignMapColors(countries, owners);
     const legacyOwners = rasterizePrevious(legacyUsable, LEGACY_MAP_W, LEGACY_MAP_H);
-    return new WorldEngine(countries, owners, legacyOwners, seed, await terrain, await admin1);
+    const [elevation, administrative, airports] = await Promise.all([terrain, admin1, loadAirports()]);
+    return new WorldEngine(countries, owners, legacyOwners, seed, elevation, administrative, airports);
   }
 
   private random() {
@@ -1332,14 +1350,20 @@ export class WorldEngine {
         if (neighbours.some((n) => n >= 0 && this.initialOwners[n] < 0)) coast.add(this.strategicProvinceAt[index]);
       }
     }
+    const airportsByRegion = new Uint16Array(this.strategicRegions.length);
+    for (let point = 0; point + 1 < this.airports.length; point += 2) {
+      const x = wrapX(Math.round(this.airports[point] / 100 * MAP_W / 360));
+      const y = Math.max(0, Math.min(MAP_H - 1, Math.round(this.airports[point + 1] / 100 * MAP_H / 180)));
+      const regionId = this.strategicProvinceAt[y * MAP_W + x];
+      if (regionId >= 0) airportsByRegion[regionId]++;
+    }
     for (const region of this.strategicRegions) {
       const isCoastal = coast.has(region.id);
       const isLarge = region.areaKm2 > 20_000;
-      const hasCapital = region.cells > 800;
       region.maritimeAccess = isCoastal ? 70 : 0;
       region.railDensity = isLarge ? 0.7 : 0.35;
       region.roadDensity = 0.5;
-      region.airportCount = hasCapital ? 1 : 0;
+      region.airportCount = airportsByRegion[region.id];
       region.riverAccess = 0;
       region.logisticsIndex = Math.max(0, Math.min(100,
         region.maritimeAccess * 0.30 +
