@@ -148,7 +148,9 @@ void main() {
   // Country borders are the only lines visible at the world/continent scale.
   // One narrow dark pass avoids the old double-sided gold "pipes".
   if (ownerBoundary) colour = mix(colour, vec3(.012, .045, .058), .9);
-  if (targetBoundary) colour = vec3(1.0, .035, .16);
+  // Wybrany sektor ma być czytelnym, lecz spokojnym punktem orientacyjnym.
+  // Turkus zachowuje kontrast z mapą polityczną bez alarmowego skojarzenia czerwieni.
+  if (targetBoundary) colour = mix(colour, vec3(.26, .88, .78), .92);
   outColor = vec4(colour, 1.0);
 }`;
 

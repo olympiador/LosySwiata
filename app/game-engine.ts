@@ -1584,9 +1584,11 @@ export class WorldEngine {
       .filter(({ id }) => this.strategicRegions.some((region) => region.ownerId === id && this.isStrategicRegionPlayable(region)))
       .map(({ id }) => ({ id, power: this.strategicPower(id) }))
       .sort((a, b) => b.power - a.power || a.id - b.id);
-    const strongest = powers[0]?.power ?? 0;
     return powers.map(({ id, power }, rankIndex) => {
-      const rating = strongest > 0 ? Math.max(1, Math.round(power / strongest * 100)) : 0;
+      // Ocena ma być bezwzględną skalą możliwości państwa. Wcześniej była
+      // wyłącznie procentem wyniku lidera, przez co średni kraj mógł wyglądać
+      // jak potęga tylko dlatego, że najsilniejszy uczestnik był niewiele lepszy.
+      const rating = Math.max(0, Math.min(100, Math.round(power)));
       return { countryId: id, power, rating, rank: rankIndex + 1, activeCountries: powers.length, tier: rating >= 85 ? "Potęga" : rating >= 65 ? "Silne" : rating >= 40 ? "Średnie" : "Słabe", components: this.strategicComponents(id), exhaustion: this.strategicExhaustion[id] ?? 0, integration: this.integrationScore(id) };
     });
   }
@@ -4095,7 +4097,7 @@ export class WorldEngine {
         context.lineCap = "round"; context.lineJoin = "round";
         // Target selection is an exact contour, not an area-of-effect glow.
         // A single opaque pass keeps neighbouring provinces fully readable.
-        context.strokeStyle = "#ff214d";
+        context.strokeStyle = "#43d8bf";
         context.lineWidth = Math.max(.75, displayScale * .82);
         context.stroke(this.highlightOutline);
         context.restore();

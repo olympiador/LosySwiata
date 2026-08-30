@@ -190,6 +190,8 @@ test("strategic mode uses adjacent provinces, multi-round campaigns and restores
   const engine = engineFrom(initialOwners.slice(), undefined, sourceCountries);
   engine.reset(12345, "strategy", "world", "all");
   engine.setPlayerCountry(0);
+  const playerStrength = engine.getStrategicStrength(0);
+  assert.equal(playerStrength.rating, Math.round(playerStrength.power), "the visible strategic rating must be the country's own 0-100 score, not a percentage of the current leader");
   const regions = engine.getStrategicRegions();
   assert.ok(regions.length >= 4, "the world should be divided into several fixed provinces");
   const target = engine.getStrategicTargets(0)[0];
