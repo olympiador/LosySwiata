@@ -4083,10 +4083,24 @@ export class WorldEngine {
       context.strokeStyle = "rgba(1,7,12,.9)";
       context.lineWidth = Math.max(.08, displayScale * 1.25);
       if (this.countryBorders) context.stroke(this.countryBorders);
-      // Strategic sectors are interaction data, not a permanent visual grid.
-      // Drawing their raster edges at high zoom made the political map look
-      // like overlapping rectangles. The selected sector still receives its
-      // dedicated focus treatment below.
+      if (this.gameMode === "strategy" && this.strategicProvinceAt.length) {
+        const showStrategic = viewZoom >= 3.5, showAdministrative = viewZoom >= 6.5;
+        if (showStrategic || showAdministrative) {
+          this.prepareStrategicBorders(width, height);
+          context.save();
+          if (showAdministrative) {
+            context.strokeStyle = "rgba(12,31,38,.26)";
+            context.lineWidth = Math.max(.06, displayScale * .48);
+            if (this.strategicAdministrativeBorders) context.stroke(this.strategicAdministrativeBorders);
+          }
+          if (showStrategic) {
+            context.strokeStyle = "rgba(6,24,31,.48)";
+            context.lineWidth = Math.max(.07, displayScale * .78);
+            if (this.strategicBorders) context.stroke(this.strategicBorders);
+          }
+          context.restore();
+        }
+      }
     }
 
     if (highlight.length) {
