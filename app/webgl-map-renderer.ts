@@ -98,9 +98,14 @@ void main() {
   vec2 world = vec2(.5) + (v_screen - vec2(.5) - u_pan) / u_zoom;
   world.x = fract(world.x);
   world.y = clamp(world.y, 0.0, 1.0);
-  vec2 baseUv;
-  vec3 currentIdentity = visualIdsAt(world, baseUv);
-  vec4 base = texture(u_map, baseUv);
+  vec2 identityUv;
+  vec3 currentIdentity = visualIdsAt(world, identityUv);
+  // Both textures describe the same projected map. Sampling the political
+  // colour from a different, chosen corner of the identity texture made large
+  // rectangular colour patches slip over otherwise correct country borders.
+  // The map texture is nearest-filtered, so this direct coordinate lookup
+  // remains crisp while staying exactly registered with the border texture.
+  vec4 base = texture(u_map, world);
   vec4 outline = texture(u_outline, world);
   vec3 colour = mix(base.rgb, outline.rgb, outline.a);
   vec2 screenStep = vec2(1.0 / max(1.0, u_viewSize.x * u_zoom), 1.0 / max(1.0, u_viewSize.y * u_zoom));
