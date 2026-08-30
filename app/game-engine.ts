@@ -7,6 +7,7 @@ import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_HEIGHT, ADMIN1_ISO, ADMIN1_NAMES, ADMIN1_WIDTH } from "./admin1-data";
 import { ELEVATION_HEIGHT, ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH } from "./elevation-data";
 import { REAL_AIRPORTS_DEFLATE_BASE64 } from "./airport-data";
+import { REAL_PORTS_DEFLATE_BASE64 } from "./port-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
 import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
@@ -55,6 +56,7 @@ export type StrategicRegion = {
   railDensity: number;
   roadDensity: number;
   airportCount: number;
+  portCount: number;
   riverAccess: number;
 };
 
@@ -510,6 +512,7 @@ function heapPop<T extends PriorityItem>(heap: T[]) {
 
 let elevationPromise: Promise<Uint16Array> | null = null;
 let airportPromise: Promise<Uint16Array> | null = null;
+let portPromise: Promise<Uint16Array> | null = null;
 let admin1Promise: Promise<Int16Array> | null = null;
 
 function loadAdmin1() {
@@ -579,6 +582,20 @@ function loadAirports() {
     } catch { return new Uint16Array(0); }
   })();
   return airportPromise;
+}
+
+function loadPorts() {
+  if (portPromise) return portPromise;
+  portPromise = (async () => {
+    try {
+      const binary = atob(REAL_PORTS_DEFLATE_BASE64);
+      const compressed = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index++) compressed[index] = binary.charCodeAt(index);
+      const stream = new Blob([compressed.buffer]).stream().pipeThrough(new DecompressionStream("deflate"));
+      return new Uint16Array(await new Response(stream).arrayBuffer());
+    } catch { return new Uint16Array(0); }
+  })();
+  return portPromise;
 }
 
 export class WorldEngine {
@@ -662,7 +679,7 @@ export class WorldEngine {
   private highlightOutline: Path2D | null = null;
   private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 1, lastDecisionTurn: 0 };
 
-  private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0)) {
+  private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly ports: Uint16Array<ArrayBufferLike> = new Uint16Array(0)) {
     this.countries = countries;
     this.owners = owners;
     this.initialOwners = owners.slice();
@@ -874,8 +891,8 @@ export class WorldEngine {
     separateCountriesByWater(owners, countries, "DK", "SE");
     assignMapColors(countries, owners);
     const legacyOwners = rasterizePrevious(legacyUsable, LEGACY_MAP_W, LEGACY_MAP_H);
-    const [elevation, administrative, airports] = await Promise.all([terrain, admin1, loadAirports()]);
-    return new WorldEngine(countries, owners, legacyOwners, seed, elevation, administrative, airports);
+    const [elevation, administrative, airports, ports] = await Promise.all([terrain, admin1, loadAirports(), loadPorts()]);
+    return new WorldEngine(countries, owners, legacyOwners, seed, elevation, administrative, airports, ports);
   }
 
   private random() {
@@ -963,7 +980,7 @@ export class WorldEngine {
       if (known !== undefined) return known;
       const id = regions.length;
       byKey.set(key, id);
-      regions.push({ id, name, originalOwnerId, ownerId: originalOwnerId, cells: 0, areaKm2: 0, cx: 0, cy: 0, neighbours: [], provinceCount: 1, provinceNames: name ? [name] : [], logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, riverAccess: 0 });
+      regions.push({ id, name, originalOwnerId, ownerId: originalOwnerId, cells: 0, areaKm2: 0, cx: 0, cy: 0, neighbours: [], provinceCount: 1, provinceNames: name ? [name] : [], logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, portCount: 0, riverAccess: 0 });
       runs.push([]); neighbourSets.push(new Set()); sumsX.push(0); sumsY.push(0); weights.push(0);
       return id;
     };
@@ -1180,7 +1197,7 @@ export class WorldEngine {
           ownerId: largest.originalOwnerId, cells: cluster.cells, areaKm2: cluster.area,
           cx: cluster.weightedX / Math.max(1, cluster.area), cy: cluster.weightedY / Math.max(1, cluster.area), neighbours: [],
           provinceCount: members.length, provinceNames: names,
-          logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, riverAccess: 0,
+          logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, portCount: 0, riverAccess: 0,
         };
       });
       const sectorAt = new Int32Array(provinceAt.length); sectorAt.fill(-1);
@@ -1357,10 +1374,18 @@ export class WorldEngine {
       const regionId = this.strategicProvinceAt[y * MAP_W + x];
       if (regionId >= 0) airportsByRegion[regionId]++;
     }
+    const portsByRegion = new Uint16Array(this.strategicRegions.length);
+    for (let point = 0; point + 1 < this.ports.length; point += 2) {
+      const x = wrapX(Math.round(this.ports[point] / 100 * MAP_W / 360));
+      const y = Math.max(0, Math.min(MAP_H - 1, Math.round(this.ports[point + 1] / 100 * MAP_H / 180)));
+      const regionId = this.strategicProvinceAt[y * MAP_W + x];
+      if (regionId >= 0) portsByRegion[regionId]++;
+    }
     for (const region of this.strategicRegions) {
       const isCoastal = coast.has(region.id);
       const isLarge = region.areaKm2 > 20_000;
-      region.maritimeAccess = isCoastal ? 70 : 0;
+      region.portCount = portsByRegion[region.id];
+      region.maritimeAccess = isCoastal ? Math.max(12, Math.min(100, region.portCount * 25)) : 0;
       region.railDensity = isLarge ? 0.7 : 0.35;
       region.roadDensity = 0.5;
       region.airportCount = airportsByRegion[region.id];
@@ -1473,7 +1498,15 @@ export class WorldEngine {
   }
 
   getCountryLogisticsFromRegions(countryId: number) {
-    return getCountryLogisticsFromRegions(this.strategicRegions, countryId);
+    const trade = this.getCountryMaritimeTrade(countryId);
+    return Math.max(0, getCountryLogisticsFromRegions(this.strategicRegions, countryId) - trade.blockade * 18);
+  }
+  getCountryMaritimeTrade(countryId: number) {
+    const coastal = this.strategicRegions.filter((region) => region.ownerId === countryId && region.portCount > 0);
+    const ports = coastal.reduce((sum, region) => sum + region.portCount, 0);
+    const blockadedPorts = coastal.filter((region) => this.strategicCampaigns.some((campaign) => campaign.defenderId === countryId && campaign.regionId === region.id)).reduce((sum, region) => sum + region.portCount, 0);
+    const blockade = ports ? blockadedPorts / ports : 0;
+    return { ports, blockadedPorts, blockade, access: Math.max(0, Math.round((1 - blockade) * Math.min(100, ports * 12))), status: !ports ? "Brak portów handlowych" : blockadedPorts ? `Blokada obejmuje ${blockadedPorts} portów` : "Szlaki morskie otwarte" };
   }
   getCountryLogisticsInvestments(countryId: number) {
     const state = this.countryCapabilityStates[countryId];
@@ -2129,6 +2162,7 @@ export class WorldEngine {
         sanctionsPenalty: this.SANCTIONED_ISO3.has(this.countries[index].iso3 ?? "") ? 0.5 : 0,
         immigrationDelta: this.estimatedImmigrationDelta(this.countries[index]),
         warIntensity: context.hasIncoming ? 0.6 + Math.min(0.4, context.activeOccupations * 0.15) : context.hasOutgoing ? 0.3 : 0,
+        maritimeBlockade: this.getCountryMaritimeTrade(index).blockade,
         policyEffects: index === this.playerCountryId ? { ...playerEffects, logisticsBonus } : {},
       };
       this.countryCapabilityStates[index] = evaluateCapabilityChange(state, baseline, contextWithPolicy, this.turn, this.seed);

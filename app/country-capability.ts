@@ -16,6 +16,7 @@ export type RegionLogistics = {
   railDensity: number;
   roadDensity: number;
   airportCount: number;
+  portCount: number;
   riverAccess: number;
 };
 
@@ -316,7 +317,7 @@ export function evaluateRegionLogistics(region: StrategicRegion): RegionLogistic
   const airport = Math.min(100, region.airportCount * 25);
   const river = region.riverAccess * 100;
   const logisticsIndex = clamp(maritime * 0.30 + rail * 0.25 + road * 0.25 + airport * 0.15 + river * 0.05, 0, 100);
-  return { regionId: region.id, logisticsIndex, maritimeAccess: maritime, railDensity: rail, roadDensity: road, airportCount: region.airportCount, riverAccess: river };
+  return { regionId: region.id, logisticsIndex, maritimeAccess: maritime, railDensity: rail, roadDensity: road, airportCount: region.airportCount, portCount: region.portCount, riverAccess: river };
 }
 
 export function getCountryLogisticsFromRegions(regions: StrategicRegion[], countryId: number): number {
@@ -342,6 +343,7 @@ export function evaluateCapabilityChange(
     policyEffects?: any;
     regions?: StrategicRegion[];
     countryId?: number;
+    maritimeBlockade?: number;
   },
   turn: number,
   seed: number,
@@ -365,10 +367,11 @@ export function evaluateCapabilityChange(
   const cliff = demographicCliff(demographics);
   const countryLogisticsBase = context.countryId !== undefined && context.regions ? getCountryLogisticsFromRegions(context.regions, context.countryId) : baseline.logistics;
   const logisticsInvestmentBonus = state.logisticsInvestments.reduce((sum, inv) => sum + inv.bonus, 0);
-  const countryLogistics = clamp(countryLogisticsBase + logisticsInvestmentBonus, 0, 100);
+  const maritimeBlockade = context.maritimeBlockade ?? 0;
+  const countryLogistics = clamp(countryLogisticsBase + logisticsInvestmentBonus - maritimeBlockade * 18, 0, 100);
 
   const change: StrategicComponents = {
-    economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty),
+    economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty - maritimeBlockade * 0.12),
     population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty),
     technology: clamp((baseline.technology - state.components.technology) * 0.03 + (context.hasOutgoing ? -0.08 : 0.03) - sanctionsPenalty * 0.05),
     logistics: clamp((countryLogistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0)),
