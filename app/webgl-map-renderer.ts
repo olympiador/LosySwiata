@@ -163,11 +163,11 @@ void main() {
   // One narrow dark pass avoids the old double-sided gold "pipes".
   if (ownerBoundary) colour = mix(colour, vec3(.012, .045, .058), .9);
   // Focus is communicated by a gentle warm wash over the whole sector and a
-  // narrow ivory contour. This stays visible over every political colour
-  // without the alarm-like red outline used before.
-  if (targetSelected) colour = mix(colour, vec3(1.0, .76, .29), .18);
-  if (targetFocusEdge) colour = mix(colour, vec3(.96, .92, .75), .88);
-  if (targetBoundary) colour = mix(colour, vec3(.12, .18, .18), .82);
+  // A restrained steel-blue focus is visible over every political colour
+  // without a broad glow or the former alarm-like red outline.
+  if (targetSelected) colour = mix(colour, vec3(.35, .67, .82), .10);
+  if (targetFocusEdge) colour = mix(colour, vec3(.06, .16, .21), .90);
+  if (targetBoundary) colour = mix(colour, vec3(.88, .96, 1.0), .96);
   outColor = vec4(colour, 1.0);
 }`;
 

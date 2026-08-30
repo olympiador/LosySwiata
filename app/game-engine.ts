@@ -1678,8 +1678,24 @@ export class WorldEngine {
   getStrategicRegionResistance(regionId: number) {
     const sector = this.strategicRegions[regionId];
     if (!sector) return { factor: 1, label: "Nieznany" };
-    const factor = Math.max(.7, Math.min(2.8, Math.sqrt(Math.max(2_500, sector.areaKm2) / 20_000) * (1 + Math.log2(Math.max(1, sector.provinceCount)) * .08)));
+    const terrain = this.getStrategicRegionTerrain(regionId);
+    const factor = Math.max(.7, Math.min(2.8, Math.sqrt(Math.max(2_500, sector.areaKm2) / 20_000) * (1 + Math.log2(Math.max(1, sector.provinceCount)) * .08) * terrain.defenseFactor));
     return { factor, label: factor >= 2.15 ? "Bardzo wysoki" : factor >= 1.5 ? "Wysoki" : factor >= .95 ? "Standardowy" : "Niski" };
+  }
+
+  getStrategicRegionTerrain(regionId: number) {
+    const sector = this.strategicRegions[regionId];
+    if (!sector || !this.strategicProvinceAt.length) return { label: "Nieznany", defenseFactor: 1, description: "Brak danych o rzeźbie terenu." };
+    let slope = 0, pairs = 0;
+    for (const [start, count] of this.strategicRegionRuns[regionId] ?? []) for (let index = start; index < start + count; index++) {
+      const x = index % MAP_W, y = Math.floor(index / MAP_W);
+      const right = y * MAP_W + wrapX(x + 1), down = y + 1 < MAP_H ? index + MAP_W : -1;
+      for (const next of [right, down]) if (next >= 0 && this.strategicProvinceAt[next] === regionId) { slope += Math.abs(this.elevation[index] - this.elevation[next]); pairs++; }
+    }
+    const roughness = slope / Math.max(1, pairs);
+    if (roughness >= 105) return { label: "Górzysty", defenseFactor: 1.13, description: "Strome i nierówne podejścia lekko sprzyjają obronie." };
+    if (roughness >= 48) return { label: "Pofałdowany", defenseFactor: 1.05, description: "Urozmaicona rzeźba terenu lekko utrudnia szybki atak." };
+    return { label: "Równinny", defenseFactor: .96, description: "Otwarty teren ułatwia przemieszczanie się obu stronom." };
   }
 
   getStrategicWarAssessment(attackerId: number, defenderId: number, regionId: number | null = null): StrategicWarAssessment {
@@ -4010,7 +4026,7 @@ export class WorldEngine {
     const shade = Math.max(.61, Math.min(1.34, 1 + (slopeX * .65 + slopeY * .82) / 3_600 + microRelief));
     const [countryR, countryG, countryB] = this.countries[owner].color;
     const country = [countryR, countryG, countryB];
-    const glow = flashed ? 42 : owner === selected ? 10 : 0;
+    const glow = flashed ? 18 : owner === selected ? 10 : 0;
     const playable = this.isCountryPlayable(owner), fade = playable ? 1 : .25;
     return terrain.map((channel, index) => Math.max(0, Math.min(255,
       ((channel * .52 + country[index] * .48) * shade + glow) * fade + (playable ? 0 : index === 0 ? 8 : index === 1 ? 18 : 23),
@@ -4048,7 +4064,7 @@ export class WorldEngine {
           pixels[pixel] = 7; pixels[pixel + 1] = 29 + Math.round(wave * 5); pixels[pixel + 2] = 45 + Math.round(wave * 8);
         } else {
           const [r, g, b] = this.countries[owner].color, texture = (((sourceX * 17 + sourceY * 31 + owner * 11) % 13) - 6) * 0.55;
-          const glow = sourceFlash?.[source] ? 45 : owner === selected ? 10 : 0;
+          const glow = sourceFlash?.[source] ? 18 : owner === selected ? 10 : 0;
           const playable = this.isCountryPlayable(owner), fade = playable ? 1 : 0.24;
           const flag = mapStyle === "flags" || mapStyle === "hybrid" ? this.sampleFlag(owner, index, x, y) : null;
           const mix = flag ? mapStyle === "flags" ? 0.9 : 0.42 : 0;
@@ -4108,15 +4124,14 @@ export class WorldEngine {
       if (this.highlightOutline) {
         context.save();
         context.lineCap = "round"; context.lineJoin = "round";
-        // A warm inner wash and a dark, ivory-edged contour stay readable over
-        // every political colour without the old red warning-ring effect.
-        context.strokeStyle = "rgba(255,196,74,.18)";
+        // Steel-blue focus stays crisp without an alarm-like glow.
+        context.strokeStyle = "rgba(89,170,205,.14)";
         context.lineWidth = Math.max(3.2, displayScale * 3.1);
         context.stroke(this.highlightOutline);
-        context.strokeStyle = "rgba(20,35,36,.94)";
+        context.strokeStyle = "rgba(12,30,39,.94)";
         context.lineWidth = Math.max(1.4, displayScale * 1.35);
         context.stroke(this.highlightOutline);
-        context.strokeStyle = "rgba(244,235,190,.96)";
+        context.strokeStyle = "rgba(222,242,250,.96)";
         context.lineWidth = Math.max(.7, displayScale * .62);
         context.stroke(this.highlightOutline);
         context.restore();
