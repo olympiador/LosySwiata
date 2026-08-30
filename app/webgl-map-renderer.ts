@@ -137,22 +137,10 @@ void main() {
     (farLeftIdentity.g != currentIdentity.g || farRightIdentity.g != currentIdentity.g || farTopIdentity.g != currentIdentity.g || farBottomIdentity.g != currentIdentity.g);
   bool selected = u_selectedOwner > 0.0 && currentIdentity.r == u_selectedOwner;
 
-  // Administrative detail is deliberately subordinate to the political map.
-  // It fades in only at close range; selecting a country reveals its own
-  // structure a little earlier without cluttering the rest of the world.
-  float adminVisibility = smoothstep(6.3, 6.7, u_zoom);
-  if (selected) adminVisibility = max(adminVisibility, smoothstep(5.0, 5.4, u_zoom));
-  if (adminVisibility > 0.0 && adminBoundary) {
-    float strength = selected ? .38 : .22;
-    colour = mix(colour, vec3(.09, .14, .16), strength * adminVisibility);
-  }
-
-  float regionVisibility = smoothstep(3.35, 3.55, u_zoom);
-  if (selected) regionVisibility = max(regionVisibility, smoothstep(2.1, 2.4, u_zoom));
-  if (regionVisibility > 0.0 && regionBoundary) {
-    float strength = selected ? .58 : .36;
-    colour = mix(colour, vec3(.055, .105, .12), strength * regionVisibility);
-  }
+  // Strategic sectors and administrative fragments remain interaction data,
+  // not a permanent visual grid. Their raster edges looked like rectangles at
+  // close zoom, so the political map now keeps only country borders. A chosen
+  // sector still receives the dedicated focus treatment below.
 
   // Country borders are the only lines visible at the world/continent scale.
   // One narrow dark pass avoids the old double-sided gold "pipes".
