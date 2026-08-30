@@ -49,6 +49,9 @@ test("capital reference covers every sovereign country used by the game", () => 
 test("curated baseline recognizes the documented defensive preparation in Donbas", () => {
   assert.equal(curatedFortificationBaseline("UA", "doniecki").score, 40);
   assert.equal(curatedFortificationBaseline("UA", "ługański").score, 40);
+  assert.equal(curatedFortificationBaseline("KR", "Gyeonggi", MAP_W * (127.5 + 180) / 360, MAP_H * (90 - 37.5) / 180).score, 45);
+  assert.equal(curatedFortificationBaseline("PK", "Azad Kashmir", MAP_W * (74 + 180) / 360, MAP_H * (90 - 34) / 180).score, 32);
+  assert.equal(curatedFortificationBaseline("MA", "Sahara", MAP_W * (-13 + 180) / 360, MAP_H * (90 - 25) / 180).score, 35);
   assert.equal(curatedFortificationBaseline("KG", "Naryn").score, 0);
 });
 

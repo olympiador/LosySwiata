@@ -61,11 +61,30 @@ export type StrategicRegion = {
   fortification: number;
 };
 
+type CuratedFortificationZone = { countries: string[]; south: number; north: number; west: number; east: number; score: number; source: string };
+const CURATED_FORTIFICATION_ZONES: CuratedFortificationZone[] = [
+  { countries: ["KP", "KR"], south: 35.5, north: 39.2, west: 124.5, east: 131.5, score: 45, source: "DMZ i przygotowania obronne Półwyspu Koreańskiego" },
+  { countries: ["IN", "PK"], south: 31.0, north: 37.5, west: 71.0, east: 81.5, score: 32, source: "Linia Kontroli w Kaszmirze" },
+  { countries: ["IN", "CN"], south: 26.0, north: 37.5, west: 76.0, east: 100.0, score: 22, source: "Sporna granica indyjsko-chińska" },
+  { countries: ["AM", "AZ"], south: 38.0, north: 41.8, west: 43.0, east: 48.5, score: 25, source: "Ufortyfikowane kierunki Kaukazu Południowego" },
+  { countries: ["IL", "PS", "LB", "SY"], south: 29.0, north: 34.8, west: 34.0, east: 37.5, score: 25, source: "Przygotowane kierunki Lewantu" },
+  { countries: ["CY"], south: 34.3, north: 35.8, west: 32.0, east: 34.9, score: 28, source: "Strefa buforowa i obrona Cypru" },
+  { countries: ["MA", "EH"], south: 20.0, north: 28.8, west: -18.0, east: -10.0, score: 35, source: "Wał obronny Sahary Zachodniej" },
+  { countries: ["MD"], south: 46.0, north: 48.7, west: 27.0, east: 30.2, score: 15, source: "Strefa bezpieczeństwa Naddniestrza" },
+  { countries: ["RS", "XK"], south: 42.0, north: 43.8, west: 20.0, east: 22.2, score: 14, source: "Wrażliwe kierunki Serbii i Kosowa" },
+];
+
 /** Kuratorowana baza opisuje przygotowanie całego sektora, nie liczbę bunkrów. */
-export function curatedFortificationBaseline(countryIso: string, regionName: string) {
+export function curatedFortificationBaseline(countryIso: string, regionName: string, cx?: number, cy?: number) {
   const normalized = regionName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ł/g, "l").toLowerCase();
   if (countryIso === "UA" && (normalized.includes("doniecki") || normalized.includes("luganski"))) {
     return { score: 40, source: "Rozpoznane pozycje obronne Donbasu" };
+  }
+  if (Number.isFinite(cx) && Number.isFinite(cy)) {
+    const longitude = (cx! / MAP_W) * 360 - 180;
+    const latitude = 90 - (cy! / MAP_H) * 180;
+    const zone = CURATED_FORTIFICATION_ZONES.filter((candidate) => candidate.countries.includes(countryIso) && latitude >= candidate.south && latitude <= candidate.north && longitude >= candidate.west && longitude <= candidate.east).sort((a, b) => b.score - a.score)[0];
+    if (zone) return { score: zone.score, source: zone.source };
   }
   return { score: 0, source: "Brak kuratorowanych danych o umocnieniach" };
 }
@@ -1348,7 +1367,7 @@ export class WorldEngine {
     this.strategicAdministrativeAt = administrativeAt;
     this.strategicRegions = regions;
     for (const region of this.strategicRegions) {
-      region.fortification = curatedFortificationBaseline(this.countries[region.originalOwnerId]?.iso ?? "", region.name).score;
+      region.fortification = curatedFortificationBaseline(this.countries[region.originalOwnerId]?.iso ?? "", region.name, region.cx, region.cy).score;
     }
     this.strategicRegionRuns = runs;
     this.strategicCampaigns = [];
@@ -1759,7 +1778,7 @@ export class WorldEngine {
     const terrain = this.getStrategicRegionTerrain(regionId);
     if (!sector) return { fortification: 0, fortificationLabel: "Brak danych", naturalObstacle: "Brak danych", attackerBrief: "Brak danych o sektorze." };
     const fortification = Math.round(sector.fortification);
-    const baseline = curatedFortificationBaseline(this.countries[sector.originalOwnerId]?.iso ?? "", sector.name);
+    const baseline = curatedFortificationBaseline(this.countries[sector.originalOwnerId]?.iso ?? "", sector.name, sector.cx, sector.cy);
     const fortificationLabel = fortification >= 70 ? "Rozbudowane" : fortification >= 35 ? "Przygotowane" : fortification > 0 ? "Początkowe" : "Brak";
     const naturalObstacle = terrain.label === "Górzysty" ? "Strome podejścia i ograniczone osie natarcia" : terrain.label === "Pofałdowany" ? "Nierówny teren spowalnia marsz i rozpoznanie" : "Otwarty teren, łatwiejsze manewrowanie";
     const attackerBrief = fortification > 0
