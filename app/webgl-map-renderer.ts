@@ -124,8 +124,17 @@ void main() {
   // Attack targets use a one-screen-pixel inner contour. It is deliberately
   // derived here rather than baked into the map texture, so 1200% zoom cannot
   // magnify a one-pixel line into a wide red band.
-  bool targetBoundary = u_selectedRegion > 0.0 && currentIdentity.g == u_selectedRegion &&
+  bool targetSelected = u_selectedRegion > 0.0 && currentIdentity.g == u_selectedRegion;
+  bool targetBoundary = targetSelected &&
     (leftIdentity.g != currentIdentity.g || rightIdentity.g != currentIdentity.g || topIdentity.g != currentIdentity.g || bottomIdentity.g != currentIdentity.g);
+  // A slightly wider sample makes the focus contour remain clear on a bright
+  // political fill, without baking a thick band into the map texture.
+  vec3 farLeftIdentity = visualIdsAt(world - vec2(screenStep.x * 2.15, 0.0), ignored);
+  vec3 farRightIdentity = visualIdsAt(world + vec2(screenStep.x * 2.15, 0.0), ignored);
+  vec3 farTopIdentity = visualIdsAt(world - vec2(0.0, screenStep.y * 2.15), ignored);
+  vec3 farBottomIdentity = visualIdsAt(world + vec2(0.0, screenStep.y * 2.15), ignored);
+  bool targetFocusEdge = targetSelected &&
+    (farLeftIdentity.g != currentIdentity.g || farRightIdentity.g != currentIdentity.g || farTopIdentity.g != currentIdentity.g || farBottomIdentity.g != currentIdentity.g);
   bool selected = u_selectedOwner > 0.0 && currentIdentity.r == u_selectedOwner;
 
   // Administrative detail is deliberately subordinate to the political map.
@@ -148,9 +157,12 @@ void main() {
   // Country borders are the only lines visible at the world/continent scale.
   // One narrow dark pass avoids the old double-sided gold "pipes".
   if (ownerBoundary) colour = mix(colour, vec3(.012, .045, .058), .9);
-  // Wybrany sektor ma być czytelnym, lecz spokojnym punktem orientacyjnym.
-  // Turkus zachowuje kontrast z mapą polityczną bez alarmowego skojarzenia czerwieni.
-  if (targetBoundary) colour = mix(colour, vec3(.26, .88, .78), .92);
+  // Focus is communicated by a gentle warm wash over the whole sector and a
+  // narrow ivory contour. This stays visible over every political colour
+  // without the alarm-like red outline used before.
+  if (targetSelected) colour = mix(colour, vec3(1.0, .76, .29), .18);
+  if (targetFocusEdge) colour = mix(colour, vec3(.96, .92, .75), .88);
+  if (targetBoundary) colour = mix(colour, vec3(.12, .18, .18), .82);
   outColor = vec4(colour, 1.0);
 }`;
 

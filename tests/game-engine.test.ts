@@ -193,7 +193,7 @@ test("strategic mode uses adjacent provinces, multi-round campaigns and restores
   const playerStrength = engine.getStrategicStrength(0);
   assert.equal(playerStrength.rating, Math.round(playerStrength.power), "the visible strategic rating must be the country's own 0-100 score, not a percentage of the current leader");
   const regions = engine.getStrategicRegions();
-  assert.ok(regions.length >= 4, "the world should be divided into several fixed provinces");
+  assert.equal(regions.length, 2, "without Admin-1 data each connected country shape remains one strategic sector");
   const target = engine.getStrategicTargets(0)[0];
   assert.ok(target, "the player should see an adjacent enemy province");
 
@@ -328,6 +328,18 @@ test("real Admin-1 borders give Poland sixteen named voivodeships independent of
   const second = engine.getStrategicRegions().filter(({ originalOwnerId }) => originalOwnerId === 0);
   assert.deepEqual(second.map(({ name, cells }) => [name, cells]), first.map(({ name, cells }) => [name, cells]));
   assert.ok(ADMIN1_NAMES.includes("województwo pomorskie"));
+});
+
+test("fallback strategic regions preserve real connected country shapes instead of a square grid", () => {
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  const y = Math.floor(MAP_H / 2), x = Math.floor(MAP_W / 2);
+  for (let offsetY = 0; offsetY < 5; offsetY++) for (let offsetX = 0; offsetX < 8; offsetX++) owners[indexAt(x + offsetX, y + offsetY)] = 0;
+  for (let offsetY = 0; offsetY < 4; offsetY++) for (let offsetX = 0; offsetX < 3; offsetX++) owners[indexAt(x + 24 + offsetX, y + offsetY)] = 0;
+  const engine = engineFrom(owners, undefined, [{ ...countries[0], iso: "PL", name: "Polska" }]);
+  engine.reset(1, "strategy", "world", "all");
+  const regions = engine.getStrategicRegions().filter(({ originalOwnerId }) => originalOwnerId === 0);
+  assert.equal(regions.length, 2, "disconnected real land components remain sectors instead of being sliced into rectangles");
+  assert.deepEqual([...regions.map(({ name }) => name)].sort(), ["Polska — region 1", "Polska — region 2"]);
 });
 
 test("strategic sectors balance Latvia without reducing Poland or Germany", () => {

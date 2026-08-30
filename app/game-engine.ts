@@ -1026,19 +1026,32 @@ export class WorldEngine {
         provinceAt[index] = regionId;
       }
     } else {
-      // Compatibility fallback for tests and browsers without stream
-      // decompression. Production games use real Admin-1 borders above.
-      const scaleX = 210, scaleY = 145;
-      const seedPhase = (this.seed % 6_283) / 1_000;
-      for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
-        const index = y * MAP_W + x, originalOwnerId = this.initialOwners[index];
-        if (originalOwnerId < 0) continue;
-        const bentX = x + Math.sin(y * .018 + originalOwnerId * .71 + seedPhase) * 31;
-        const bentY = y + Math.sin(x * .014 - originalOwnerId * .53 - seedPhase) * 23;
-        const key = this.countries[originalOwnerId]?.iso === "RU" && isKaliningradIndex(index)
-          ? `${originalOwnerId}:kaliningrad`
-          : `${originalOwnerId}:${Math.floor(bentX / scaleX)}:${Math.floor(bentY / scaleY)}`;
-        provinceAt[index] = createRegion(key, originalOwnerId, "");
+      // Keep the atlas silhouettes intact if Admin-1 data cannot be unpacked.
+      // The former compatibility path overlaid an artificial rectangular grid,
+      // which made real countries look procedurally generated. Connected land
+      // components retain their true coastlines and borders instead.
+      const queue = new Int32Array(this.initialOwners.length);
+      let component = 0;
+      for (let start = 0; start < this.initialOwners.length; start++) {
+        const originalOwnerId = this.initialOwners[start];
+        if (originalOwnerId < 0 || provinceAt[start] >= 0) continue;
+        const regionId = createRegion(`${originalOwnerId}:component:${component++}`, originalOwnerId, "");
+        let head = 0, tail = 0;
+        queue[tail++] = start;
+        provinceAt[start] = regionId;
+        while (head < tail) {
+          const index = queue[head++], x = index % MAP_W, y = Math.floor(index / MAP_W);
+          const neighbours = [
+            y > 0 ? index - MAP_W : -1,
+            y + 1 < MAP_H ? index + MAP_W : -1,
+            y * MAP_W + wrapX(x - 1),
+            y * MAP_W + wrapX(x + 1),
+          ];
+          for (const next of neighbours) if (next >= 0 && this.initialOwners[next] === originalOwnerId && provinceAt[next] < 0) {
+            provinceAt[next] = regionId;
+            queue[tail++] = next;
+          }
+        }
       }
     }
 
@@ -4095,10 +4108,16 @@ export class WorldEngine {
       if (this.highlightOutline) {
         context.save();
         context.lineCap = "round"; context.lineJoin = "round";
-        // Target selection is an exact contour, not an area-of-effect glow.
-        // A single opaque pass keeps neighbouring provinces fully readable.
-        context.strokeStyle = "#43d8bf";
-        context.lineWidth = Math.max(.75, displayScale * .82);
+        // A warm inner wash and a dark, ivory-edged contour stay readable over
+        // every political colour without the old red warning-ring effect.
+        context.strokeStyle = "rgba(255,196,74,.18)";
+        context.lineWidth = Math.max(3.2, displayScale * 3.1);
+        context.stroke(this.highlightOutline);
+        context.strokeStyle = "rgba(20,35,36,.94)";
+        context.lineWidth = Math.max(1.4, displayScale * 1.35);
+        context.stroke(this.highlightOutline);
+        context.strokeStyle = "rgba(244,235,190,.96)";
+        context.lineWidth = Math.max(.7, displayScale * .62);
         context.stroke(this.highlightOutline);
         context.restore();
       }
