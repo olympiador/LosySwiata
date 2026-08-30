@@ -259,7 +259,12 @@ export class WebGLMapRenderer {
   }
 
   upload(map: HTMLCanvasElement, outline: HTMLCanvasElement, identity?: HTMLCanvasElement, administrative?: HTMLCanvasElement, preprojected?: boolean) {
-    this.uploadTexture(0, this.mapTexture, map);
+    // The map is a categorical political surface, not a photograph. Linear
+    // texture filtering mixed two countries' colours across a border when
+    // zoomed in, creating the visible "crayon outside the line" artefact.
+    // The shader already reconstructs contours from categorical IDs, so the
+    // colour texture itself must stay nearest-sampled.
+    this.uploadTexture(0, this.mapTexture, map, true);
     this.uploadTexture(1, this.outlineTexture, outline);
     if (identity) this.uploadTexture(2, this.identityTexture, identity, true);
     if (administrative) this.uploadTexture(3, this.administrativeTexture, administrative, true);
