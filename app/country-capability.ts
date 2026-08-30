@@ -60,7 +60,8 @@ export type PolicyDecisionId =
   | "build-port"
   | "modernize-roads"
   | "expand-airport"
-  | "rail-upgrade";
+  | "rail-upgrade"
+  | "fortify-sector";
 
 export type PlayerPolicyDecision = {
   id: PolicyDecisionId;
@@ -458,6 +459,7 @@ export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, P
     "modernize-roads": { id: "modernize-roads", name: "Modernizacja dróg", description: "Ulepszenie sieci drogowej. Podnosi logistykę o +10.", cost: 1, effects: {}, costs: { economyDelta: -3 }, duration: 4, cooldown: 12, lastUsedTurn: -20, condition: () => true },
     "expand-airport": { id: "expand-airport", name: "Rozbudowa lotniska", description: "Nowe lotnisko w regionie. Podnosi logistykę o +12.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.economy > 30 },
     "rail-upgrade": { id: "rail-upgrade", name: "Modernizacja kolei", description: "Ulepszenie infrastruktury kolejowej. Podnosi logistykę o +15.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.technology > 25 },
+    "fortify-sector": { id: "fortify-sector", name: "Przygotuj umocnienia", description: "Budowa trwałych umocnień w wybranym sektorze. Każda decyzja zwiększa jego obronę o 25 pkt.", cost: 2, effects: {}, costs: { economyDelta: -5 }, duration: 1, cooldown: 12, lastUsedTurn: -20, condition: () => true },
   };
 }
 

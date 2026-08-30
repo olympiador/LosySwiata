@@ -4,6 +4,7 @@ import { inflateSync } from "node:zlib";
 import { assignCrimeaToUkraine, circularColumnSpan, classifyGameRegion, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
 import { evaluateCapabilityChange, initialCapabilityStates, loadCapabilityStatesFromSnapshot } from "../app/country-capability";
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_ISO, ADMIN1_NAMES } from "../app/admin1-data";
+import { REAL_AIRPORTS_DEFLATE_BASE64 } from "../app/airport-data";
 import { CAPITALS } from "../app/capital-data";
 
 Object.defineProperty(globalThis, "document", {
@@ -29,6 +30,8 @@ const EngineConstructor = WorldEngine as unknown as new (
   seed: number,
   elevation?: Uint16Array,
   admin1At?: Int16Array,
+  airports?: Uint16Array,
+  ports?: Uint16Array,
 ) => WorldEngine;
 
 function engineFrom(owners: Int16Array, elevation?: Uint16Array, sourceCountries = countries, admin1At?: Int16Array) {
@@ -328,6 +331,17 @@ test("real Admin-1 borders give Poland sixteen named voivodeships independent of
   const second = engine.getStrategicRegions().filter(({ originalOwnerId }) => originalOwnerId === 0);
   assert.deepEqual(second.map(({ name, cells }) => [name, cells]), first.map(({ name, cells }) => [name, cells]));
   assert.ok(ADMIN1_NAMES.includes("województwo pomorskie"));
+});
+
+test("a new Polish strategy game places airports from the bundled real-airport dataset", () => {
+  const admin1At = new Int16Array(inflateSync(Buffer.from(ADMIN1_DEFLATE_BASE64, "base64")).buffer);
+  const airports = new Uint16Array(inflateSync(Buffer.from(REAL_AIRPORTS_DEFLATE_BASE64, "base64")).buffer);
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let index = 0; index < admin1At.length; index++) if (admin1At[index] >= 0 && ADMIN1_ISO[admin1At[index]] === "PL") owners[index] = 0;
+  const engine = new EngineConstructor([{ ...countries[0], iso: "PL", name: "Polska" }], owners, owners.slice(), 1, undefined, admin1At, airports);
+  engine.reset(1, "strategy", "europe", "all");
+  assert.ok(engine.getStrategicRegions().filter(({ originalOwnerId }) => originalOwnerId === 0).reduce((sum, region) => sum + region.airportCount, 0) > 0);
 });
 
 test("fallback strategic regions preserve real connected country shapes instead of a square grid", () => {

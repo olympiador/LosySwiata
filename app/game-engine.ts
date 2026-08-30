@@ -58,6 +58,7 @@ export type StrategicRegion = {
   airportCount: number;
   portCount: number;
   riverAccess: number;
+  fortification: number;
 };
 
 export type LogisticsInvestment = {
@@ -198,6 +199,7 @@ export type GameSnapshot = {
   strategicTerritoryLog?: StrategicTerritoryEvent[];
   strategicOccupations?: StrategicOccupation[];
   strategicExhaustion?: number[];
+  strategicFortifications?: number[];
   strategicDefenseState?: StrategicDefenseState;
   colors?: Array<[number, number, number]>;
   mapRevision?: number;
@@ -980,7 +982,7 @@ export class WorldEngine {
       if (known !== undefined) return known;
       const id = regions.length;
       byKey.set(key, id);
-      regions.push({ id, name, originalOwnerId, ownerId: originalOwnerId, cells: 0, areaKm2: 0, cx: 0, cy: 0, neighbours: [], provinceCount: 1, provinceNames: name ? [name] : [], logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, portCount: 0, riverAccess: 0 });
+      regions.push({ id, name, originalOwnerId, ownerId: originalOwnerId, cells: 0, areaKm2: 0, cx: 0, cy: 0, neighbours: [], provinceCount: 1, provinceNames: name ? [name] : [], logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, portCount: 0, riverAccess: 0, fortification: 0 });
       runs.push([]); neighbourSets.push(new Set()); sumsX.push(0); sumsY.push(0); weights.push(0);
       return id;
     };
@@ -1197,7 +1199,7 @@ export class WorldEngine {
           ownerId: largest.originalOwnerId, cells: cluster.cells, areaKm2: cluster.area,
           cx: cluster.weightedX / Math.max(1, cluster.area), cy: cluster.weightedY / Math.max(1, cluster.area), neighbours: [],
           provinceCount: members.length, provinceNames: names,
-          logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, portCount: 0, riverAccess: 0,
+          logisticsIndex: 50, maritimeAccess: 0, railDensity: 0.5, roadDensity: 0.5, airportCount: 0, portCount: 0, riverAccess: 0, fortification: 0,
         };
       });
       const sectorAt = new Int32Array(provinceAt.length); sectorAt.fill(-1);
@@ -1736,8 +1738,21 @@ export class WorldEngine {
     const sector = this.strategicRegions[regionId];
     if (!sector) return { factor: 1, label: "Nieznany" };
     const terrain = this.getStrategicRegionTerrain(regionId);
-    const factor = Math.max(.7, Math.min(2.8, Math.sqrt(Math.max(2_500, sector.areaKm2) / 20_000) * (1 + Math.log2(Math.max(1, sector.provinceCount)) * .08) * terrain.defenseFactor));
+    const factor = Math.max(.7, Math.min(2.8, Math.sqrt(Math.max(2_500, sector.areaKm2) / 20_000) * (1 + Math.log2(Math.max(1, sector.provinceCount)) * .08) * terrain.defenseFactor * (1 + sector.fortification / 200)));
     return { factor, label: factor >= 2.15 ? "Bardzo wysoki" : factor >= 1.5 ? "Wysoki" : factor >= .95 ? "Standardowy" : "Niski" };
+  }
+
+  getStrategicRegionDefenseProfile(regionId: number) {
+    const sector = this.strategicRegions[regionId];
+    const terrain = this.getStrategicRegionTerrain(regionId);
+    if (!sector) return { fortification: 0, fortificationLabel: "Brak danych", naturalObstacle: "Brak danych", attackerBrief: "Brak danych o sektorze." };
+    const fortification = Math.round(sector.fortification);
+    const fortificationLabel = fortification >= 70 ? "Rozbudowane" : fortification >= 35 ? "Przygotowane" : fortification > 0 ? "Początkowe" : "Brak";
+    const naturalObstacle = terrain.label === "Górzysty" ? "Strome podejścia i ograniczone osie natarcia" : terrain.label === "Pofałdowany" ? "Nierówny teren spowalnia marsz i rozpoznanie" : "Otwarty teren, łatwiejsze manewrowanie";
+    const attackerBrief = fortification > 0
+      ? `Atakujący musi przełamać ${fortificationLabel.toLowerCase()} umocnienia, a następnie utrzymać zaopatrzenie na obszarze ${Math.round(sector.areaKm2).toLocaleString("pl-PL")} km².`
+      : `Atakujący musi utrzymać zaopatrzenie na obszarze ${Math.round(sector.areaKm2).toLocaleString("pl-PL")} km². Stałe umocnienia nie zostały tu jeszcze przygotowane.`;
+    return { fortification, fortificationLabel, naturalObstacle, attackerBrief };
   }
 
   getStrategicRegionTerrain(regionId: number) {
@@ -2074,6 +2089,10 @@ export class WorldEngine {
     if (!region) return;
     if (policyId === "build-port" && region.maritimeAccess <= 0) return;
     if (policyId === "expand-airport" && !region) return;
+    if (policyId === "fortify-sector") {
+      region.fortification = Math.min(100, region.fortification + 25);
+      return;
+    }
     let type: LogisticsInvestment["type"] | null = null;
     let bonus = 0;
     switch (policyId) {
@@ -3470,6 +3489,7 @@ export class WorldEngine {
       strategicTerritoryLog: this.gameMode === "strategy" ? this.getStrategicTerritoryLog() : undefined,
       strategicOccupations: this.gameMode === "strategy" ? this.getStrategicOccupations() : undefined,
       strategicExhaustion: this.gameMode === "strategy" ? [...this.strategicExhaustion] : undefined,
+      strategicFortifications: this.gameMode === "strategy" ? this.strategicRegions.map(({ fortification }) => fortification) : undefined,
       strategicDefenseState: this.gameMode === "strategy" ? { ...this.strategicDefenseState } : undefined,
       colors: this.countries.map(({ color }) => [color[0], color[1], color[2]]),
       mapRevision: CURRENT_MAP_REVISION,
@@ -3553,6 +3573,9 @@ export class WorldEngine {
         strategicRegion.ownerId = majorityOwner;
         // Old procedural saves are migrated to coherent real provinces.
         for (const [start, count] of this.strategicRegionRuns[strategicRegion.id] ?? []) this.owners.fill(majorityOwner, start, start + count);
+      }
+      if (snapshot.strategicFortifications?.length === this.strategicRegions.length) {
+        snapshot.strategicFortifications.forEach((fortification, id) => { this.strategicRegions[id].fortification = Math.max(0, Math.min(100, fortification)); });
       }
       this.strategicCampaigns = currentStrategicSchema ? snapshot.strategicCampaigns?.map((campaign) => ({ ...campaign })) ?? [] : [];
       this.strategicTerritoryLog = currentStrategicSchema ? snapshot.strategicTerritoryLog?.map((event) => ({ ...event, provinceNames: [...event.provinceNames] })) ?? [] : [];
@@ -4326,6 +4349,7 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
   if (candidate.playerCountryId !== undefined && candidate.playerCountryId !== null && !integer(candidate.playerCountryId, 0)) return false;
   if (candidate.strategicRegionSchema !== undefined && candidate.strategicRegionSchema !== 1 && candidate.strategicRegionSchema !== 2 && candidate.strategicRegionSchema !== 3 && candidate.strategicRegionSchema !== 4 && candidate.strategicRegionSchema !== 5) return false;
   if (candidate.strategicRegionOwners !== undefined && (!Array.isArray(candidate.strategicRegionOwners) || !candidate.strategicRegionOwners.every((id) => integer(id, 0)))) return false;
+  if (candidate.strategicFortifications !== undefined && (!Array.isArray(candidate.strategicFortifications) || !candidate.strategicFortifications.every((value) => finite(value, 0, 100)))) return false;
   if (candidate.strategicCampaigns !== undefined && (!Array.isArray(candidate.strategicCampaigns) || !candidate.strategicCampaigns.every((campaign) => campaign && typeof campaign === "object"
     && integer(campaign.id, 1) && integer(campaign.attackerId, 0) && integer(campaign.defenderId, 0) && integer(campaign.regionId, 0)
     && finite(campaign.progress, 0, 100) && integer(campaign.turns, 0)
