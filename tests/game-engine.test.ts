@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { inflateSync } from "node:zlib";
-import { assignCrimeaToUkraine, circularColumnSpan, classifyGameRegion, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
+import { assignCrimeaToUkraine, circularColumnSpan, classifyGameRegion, curatedFortificationBaseline, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
 import { evaluateCapabilityChange, initialCapabilityStates, loadCapabilityStatesFromSnapshot } from "../app/country-capability";
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_ISO, ADMIN1_NAMES } from "../app/admin1-data";
 import { REAL_AIRPORTS_DEFLATE_BASE64 } from "../app/airport-data";
@@ -44,6 +44,12 @@ test("capital reference covers every sovereign country used by the game", () => 
   assert.deepEqual(CAPITALS.PL, ["Warsaw", 52.22977, 21.01178]);
   assert.deepEqual(CAPITALS.EE, ["Tallinn", 59.43696, 24.75353]);
   assert.ok(Object.keys(CAPITALS).length >= 195);
+});
+
+test("curated baseline recognizes the documented defensive preparation in Donbas", () => {
+  assert.equal(curatedFortificationBaseline("UA", "doniecki").score, 40);
+  assert.equal(curatedFortificationBaseline("UA", "ługański").score, 40);
+  assert.equal(curatedFortificationBaseline("KG", "Naryn").score, 0);
 });
 
 test("continent classification separates North, Central and South America", () => {

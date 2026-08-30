@@ -61,6 +61,15 @@ export type StrategicRegion = {
   fortification: number;
 };
 
+/** Kuratorowana baza opisuje przygotowanie całego sektora, nie liczbę bunkrów. */
+export function curatedFortificationBaseline(countryIso: string, regionName: string) {
+  const normalized = regionName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ł/g, "l").toLowerCase();
+  if (countryIso === "UA" && (normalized.includes("doniecki") || normalized.includes("luganski"))) {
+    return { score: 40, source: "Rozpoznane pozycje obronne Donbasu" };
+  }
+  return { score: 0, source: "Brak kuratorowanych danych o umocnieniach" };
+}
+
 export type LogisticsInvestment = {
   id: string;
   regionId: number;
@@ -1338,6 +1347,9 @@ export class WorldEngine {
     this.strategicProvinceAt = provinceAt;
     this.strategicAdministrativeAt = administrativeAt;
     this.strategicRegions = regions;
+    for (const region of this.strategicRegions) {
+      region.fortification = curatedFortificationBaseline(this.countries[region.originalOwnerId]?.iso ?? "", region.name).score;
+    }
     this.strategicRegionRuns = runs;
     this.strategicCampaigns = [];
     this.strategicTerritoryLog = [];
@@ -1747,12 +1759,13 @@ export class WorldEngine {
     const terrain = this.getStrategicRegionTerrain(regionId);
     if (!sector) return { fortification: 0, fortificationLabel: "Brak danych", naturalObstacle: "Brak danych", attackerBrief: "Brak danych o sektorze." };
     const fortification = Math.round(sector.fortification);
+    const baseline = curatedFortificationBaseline(this.countries[sector.originalOwnerId]?.iso ?? "", sector.name);
     const fortificationLabel = fortification >= 70 ? "Rozbudowane" : fortification >= 35 ? "Przygotowane" : fortification > 0 ? "Początkowe" : "Brak";
     const naturalObstacle = terrain.label === "Górzysty" ? "Strome podejścia i ograniczone osie natarcia" : terrain.label === "Pofałdowany" ? "Nierówny teren spowalnia marsz i rozpoznanie" : "Otwarty teren, łatwiejsze manewrowanie";
     const attackerBrief = fortification > 0
       ? `Atakujący musi przełamać ${fortificationLabel.toLowerCase()} umocnienia, a następnie utrzymać zaopatrzenie na obszarze ${Math.round(sector.areaKm2).toLocaleString("pl-PL")} km².`
       : `Atakujący musi utrzymać zaopatrzenie na obszarze ${Math.round(sector.areaKm2).toLocaleString("pl-PL")} km². Stałe umocnienia nie zostały tu jeszcze przygotowane.`;
-    return { fortification, fortificationLabel, naturalObstacle, attackerBrief };
+    return { fortification, fortificationLabel, naturalObstacle, attackerBrief, source: baseline.score > 0 ? `${baseline.source}, a potem decyzje gracza.` : "Poziom wynika wyłącznie z decyzji gracza." };
   }
 
   getStrategicRegionTerrain(regionId: number) {
