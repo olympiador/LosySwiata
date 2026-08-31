@@ -279,39 +279,31 @@ export function demographicCliff(demographics: DemographicPyramid): { economyPen
   return { economyPenalty: 0, populationPenalty: 0, stabilityPenalty: 0, manpowerPenalty: 0 };
 }
 
-export function refugeeFlowFrom(warIntensity: number, immigrationPolicy: BorderPolicy): number {
-  if (warIntensity <= 0) return 0;
-  const base = 0.05 + warIntensity * 0.25;
-  if (immigrationPolicy === "closed") return base * 0.3;
-  if (immigrationPolicy === "selective") return base * 0.7;
-  if (immigrationPolicy === "open") return base;
-  return base * 1.5;
-}
+/** Zapisuje faktyczne przekazanie ludzi między dwoma państwami. */
+export function applyRefugeeMovement(state: CountryCapabilityState, incoming: number, outgoing: number): CountryCapabilityState {
+  const population = Math.max(1, state.populationAbsolute || state.components.population * 1_000_000);
+  const arrivals = Math.max(0, Math.round(incoming));
+  const departures = Math.min(Math.max(0, Math.round(outgoing)), Math.round(population * 0.03));
+  if (!arrivals && !departures) return state;
 
-function applyRefugeeFlow(state: CountryCapabilityState, flow: number): { state: CountryCapabilityState; refugeesIn: number } {
-  if (flow <= 0) return { state, refugeesIn: 0 };
-  const workingAge = 0.7, children = 0.2, elderly = 0.1;
-  // A quarter of war must not create hundreds of thousands of residents from
-  // a single abstract migration tick. Refugees are meaningful, but battle
-  // casualties must remain visible in the country's population balance.
-  const absorbed = Math.min(state.populationAbsolute * 0.003, flow * 25_000);
-  const newWorking = absorbed * workingAge;
-  const newChildren = absorbed * children;
-  const newElderly = absorbed * elderly;
-  const scale = state.populationAbsolute > 0 ? state.populationAbsolute / 1_000_000 : state.components.population;
-  const demographics = { ...state.demographics };
-  const totalAdd = absorbed / 1_000_000;
-  demographics.primeAge += workingAge * totalAdd / Math.max(1, scale);
-  demographics.children += children * totalAdd / Math.max(1, scale);
-  demographics.elderly += elderly * totalAdd / Math.max(1, scale);
-  const sum = demographics.children + demographics.youth + demographics.primeAge + demographics.middleAge + demographics.elderly + demographics.veryOld;
-  demographics.children /= sum;
-  demographics.youth /= sum;
-  demographics.primeAge /= sum;
-  demographics.middleAge /= sum;
-  demographics.elderly /= sum;
-  demographics.veryOld /= sum;
-  return { state: { ...state, demographics, populationAbsolute: state.populationAbsolute + absorbed, refugeesHosted: state.refugeesHosted + absorbed }, refugeesIn: absorbed };
+  // Uchodźcy częściej są dziećmi oraz ludźmi w wieku produkcyjnym. Wyjazdy
+  // odbierają całemu społeczeństwu proporcjonalną część każdej grupy.
+  const groups: Array<keyof DemographicPyramid> = ["children", "youth", "primeAge", "middleAge", "elderly", "veryOld"];
+  const arrivalShare: DemographicPyramid = { children: .23, youth: .15, primeAge: .42, middleAge: .13, elderly: .05, veryOld: .02 };
+  const masses = Object.fromEntries(groups.map((group) => [group, Math.max(0, population * state.demographics[group] - departures * state.demographics[group] + arrivals * arrivalShare[group])])) as Record<keyof DemographicPyramid, number>;
+  const nextPopulation = Math.max(1, population - departures + arrivals);
+  const demographics = Object.fromEntries(groups.map((group) => [group, masses[group] / nextPopulation])) as DemographicPyramid;
+  const netPopulation = arrivals - departures;
+  const manpowerDelta = Math.round(netPopulation / 1_000_000 * .22);
+  return {
+    ...state,
+    components: { ...state.components, population: clamp(state.components.population + netPopulation / 1_000_000) },
+    demographics,
+    demographicType: demographicType(demographics),
+    manpower: { ...state.manpower, available: Math.max(0, state.manpower.available + manpowerDelta), reserves: Math.max(0, state.manpower.reserves + manpowerDelta) },
+    populationAbsolute: nextPopulation,
+    refugeesHosted: state.refugeesHosted + arrivals,
+  };
 }
 
 function applyAssimilation(state: CountryCapabilityState, rate: number): CountryCapabilityState {
@@ -429,11 +421,9 @@ export function evaluateCapabilityChange(
   const mobilizationMultiplier = mobilization === "full" ? 1.35 : mobilization === "open" ? 1.18 : 1;
   const frontCount = context.hasOutgoing ? 1 : 0;
   const maintenanceCost = Math.round((military * 0.08 + frontCount * 6 + (mobilization === "full" ? 14 : mobilization === "open" ? 7 : 0)) * 10) / 10;
-  const refugeeFlow = refugeeFlowFrom(warIntensity, immigrationPolicy);
   const populationScale = state.populationAbsolute > 0 ? state.populationAbsolute : state.components.population * 1_000_000;
-  const { state: postRefugeeState, refugeesIn } = applyRefugeeFlow(state, populationScale > 0 ? refugeeFlow : 0);
   const assimilationRateValue = assimilationRate(0.15, regimeType);
-  const postAssimilationState = applyAssimilation(postRefugeeState, context.activeOccupations > 0 ? assimilationRateValue : 0);
+  const postAssimilationState = applyAssimilation(state, context.activeOccupations > 0 ? assimilationRateValue : 0);
   const assimilationBonus = postAssimilationState.assimilationProgress >= 100 ? { economyBonus: 5, logisticsBonus: 3, stabilityBonus: 2 } : { economyBonus: 0, logisticsBonus: 0, stabilityBonus: 0 };
   const updated = {
     components: {
@@ -460,8 +450,8 @@ export function evaluateCapabilityChange(
     logisticsInvestments: state.logisticsInvestments.map((inv) => ({ ...inv })),
     culturalProximity: state.culturalProximity,
     assimilationProgress: postAssimilationState.assimilationProgress,
-    refugeesHosted: postRefugeeState.refugeesHosted,
-    populationAbsolute: postRefugeeState.populationAbsolute,
+    refugeesHosted: state.refugeesHosted,
+    populationAbsolute: state.populationAbsolute,
   };
   return updated;
 }

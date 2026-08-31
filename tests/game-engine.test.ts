@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { inflateSync } from "node:zlib";
 import { assignCrimeaToUkraine, assignFrenchGuianaOwner, circularColumnSpan, classifyGameRegion, curatedFortificationBaseline, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
-import { evaluateCapabilityChange, initialCapabilityStates, loadCapabilityStatesFromSnapshot } from "../app/country-capability";
+import { applyRefugeeMovement, evaluateCapabilityChange, initialCapabilityStates, loadCapabilityStatesFromSnapshot } from "../app/country-capability";
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_ISO, ADMIN1_NAMES } from "../app/admin1-data";
 import { REAL_AIRPORTS_DEFLATE_BASE64 } from "../app/airport-data";
 import { CAPITALS } from "../app/capital-data";
@@ -79,6 +79,14 @@ test("initial demographic pyramids differ by country development", () => {
   ]);
   assert.notDeepEqual(states[0].demographics, states[1].demographics);
   assert.ok(states[0].demographics.elderly > states[1].demographics.elderly);
+});
+
+test("refugee transfers change the sending and receiving populations without inventing residents", () => {
+  const state = initialCapabilityStates([{ ...countries[0], iso: "PL", iso3: "POL" }])[0];
+  const moved = applyRefugeeMovement(state, 12_000, 3_500);
+  assert.equal(moved.populationAbsolute, state.populationAbsolute + 8_500);
+  assert.equal(moved.refugeesHosted, state.refugeesHosted + 12_000);
+  assert.ok(moved.demographics.children > state.demographics.children, "arrival profile should include more children");
 });
 
 test("French Guiana can be assigned as the game's independent country", () => {
@@ -276,6 +284,30 @@ test("strategic mode uses adjacent provinces, multi-round campaigns and restores
   migratedLegacy.load(legacyStrategic);
   const migratedOccupations = migratedLegacy.getStrategicOccupations();
   assert.ok(migratedOccupations.some(({ regionId }) => regionId === target.id), `a v4 conquest must migrate into an active assimilation instead of staying permanently unavailable: target ${target.id}, got ${JSON.stringify(migratedOccupations)}`);
+});
+
+test("wartime refugees cross into eligible neighbouring countries, never automatically into the attacker", () => {
+  const sourceCountries: Country[] = [
+    { ...countries[0], id: 0, iso: "AA", name: "Napadnięty", region: "europe" },
+    { ...countries[1], id: 1, iso: "BB", name: "Agresor", region: "europe" },
+    { id: 2, iso: "CC", name: "Bezpieczny sąsiad", flag: "C", color: [70, 180, 100], initialWeight: 0, region: "europe" },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  for (let y = 400; y < 620; y++) {
+    for (let x = 500; x < 720; x++) owners[indexAt(x, y)] = 1;
+    for (let x = 720; x < 940; x++) owners[indexAt(x, y)] = 0;
+    for (let x = 940; x < 1_160; x++) owners[indexAt(x, y)] = 2;
+  }
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  engine.reset(2468, "strategy", "world", "all");
+  const internal = engine as unknown as { beginStrategicCampaign: (attackerId: number, regionId: number) => unknown; countryCapabilityStates: Array<{ borderPolicy: "closed" | "selective" | "open" | "mass" }> };
+  internal.countryCapabilityStates[1].borderPolicy = "closed";
+  internal.countryCapabilityStates[2].borderPolicy = "open";
+  const target = engine.getStrategicTargets(1).find(({ ownerId }) => ownerId === 0)!;
+  internal.beginStrategicCampaign(1, target.id);
+  engine.advanceStrategicRound();
+  assert.equal(engine.getCountryCapabilityState(1)?.refugeesHosted, 0, "the attacker on this front must not receive the defender's refugees");
+  assert.ok((engine.getCountryCapabilityState(2)?.refugeesHosted ?? 0) > 0, "an open, safe neighbour should receive refugees");
 });
 
 test("a neighbouring AI country can put pressure on a strong player country", () => {

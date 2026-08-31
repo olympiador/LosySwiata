@@ -10,7 +10,7 @@ import { REAL_AIRPORTS_DEFLATE_BASE64 } from "./airport-data";
 import { REAL_PORTS_DEFLATE_BASE64 } from "./port-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
-import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
+import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, applyRefugeeMovement, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
 export type { PolicyDecisionId, PlayerPolicyDecision, PlayerPolicyState, BorderPolicy, RegionLogistics };
 
 export const MAP_W = 4320;
@@ -2209,6 +2209,7 @@ export class WorldEngine {
       return campaign.attackerId === this.playerCountryId && ownerId !== campaign.attackerId;
     });
     this.advanceCapabilityStates();
+    this.distributeStrategicRefugees();
     this.settleStrategicCasualties();
     if (this.playerCountryId !== null) {
       const incoming = this.strategicCampaigns.filter(({ defenderId, regionId }) => defenderId === this.playerCountryId && this.strategicRegions[regionId]?.ownerId === this.playerCountryId);
@@ -2426,6 +2427,66 @@ export class WorldEngine {
       };
       this.countryCapabilityStates[index] = evaluateCapabilityChange(state, baseline, contextWithPolicy, this.turn, this.seed);
     }
+  }
+
+  /**
+   * Uchodźcy opuszczają państwo broniące się na aktywnym froncie i trafiają
+   * wyłącznie do jego sąsiadów. Agresor z tego frontu jest wykluczony.
+   */
+  private distributeStrategicRefugees() {
+    if (this.gameMode !== "strategy" || !this.strategicCampaigns.length) return;
+    const incoming = this.countries.map(() => 0);
+    const outgoing = this.countries.map(() => 0);
+    const frontsByDefender = new Map<number, typeof this.strategicCampaigns>();
+    for (const campaign of this.strategicCampaigns) {
+      if (this.strategicRegions[campaign.regionId]?.ownerId !== campaign.defenderId) continue;
+      const fronts = frontsByDefender.get(campaign.defenderId) ?? [];
+      fronts.push(campaign);
+      frontsByDefender.set(campaign.defenderId, fronts);
+    }
+    const openness: Record<BorderPolicy, number> = { closed: .04, selective: .55, open: 1, mass: 1.2 };
+    for (const [sourceId, fronts] of frontsByDefender) {
+      const source = this.countryCapabilityStates[sourceId];
+      if (!source) continue;
+      const attackers = new Set(fronts.map(({ attackerId }) => attackerId));
+      const recipients = this.strategicCountryNeighbours(sourceId).filter((id) => !attackers.has(id) && this.countryCapabilityStates[id]);
+      if (!recipients.length) continue;
+      const population = Math.max(0, source.populationAbsolute || source.components.population * 1_000_000);
+      const requested = Math.round(Math.min(population * .004, population * (.0008 + fronts.length * .0007)));
+      if (!requested) continue;
+      const weighted = recipients.map((id) => {
+        const target = this.countryCapabilityStates[id];
+        const components = this.strategicComponents(id);
+        const score = openness[target.borderPolicy] * (.45 + components.logistics / 200) * (.45 + target.components.stability / 200);
+        return { id, score };
+      }).filter(({ score }) => score > 0);
+      const totalWeight = weighted.reduce((sum, { score }) => sum + score, 0);
+      if (!totalWeight) continue;
+      let moved = 0;
+      const shares = weighted.map(({ id, score }) => ({ id, amount: Math.floor(requested * score / totalWeight) }));
+      for (const share of shares) moved += share.amount;
+      // Błędy zaokrągleń kierujemy do najlepiej przygotowanego sąsiada.
+      const best = [...weighted].sort((a, b) => b.score - a.score)[0];
+      if (best) shares.find(({ id }) => id === best.id)!.amount += requested - moved;
+      for (const { id, amount } of shares) incoming[id] += amount;
+      outgoing[sourceId] += requested;
+    }
+    for (let id = 0; id < this.countries.length; id++) {
+      if (!incoming[id] && !outgoing[id]) continue;
+      this.countryCapabilityStates[id] = applyRefugeeMovement(this.countryCapabilityStates[id], incoming[id], outgoing[id]);
+    }
+  }
+
+  private strategicCountryNeighbours(countryId: number) {
+    const neighbours = new Set<number>();
+    for (const region of this.strategicRegions) {
+      if (region.ownerId !== countryId) continue;
+      for (const neighbourId of region.neighbours) {
+        const ownerId = this.strategicRegions[neighbourId]?.ownerId;
+        if (ownerId !== undefined && ownerId !== countryId) neighbours.add(ownerId);
+      }
+    }
+    return [...neighbours];
   }
 
   private isWarTargetPlayable(id: number, index: number) {
