@@ -534,6 +534,32 @@ test("a much weaker strategic attacker can be repelled instead of gaining guaran
   assert.equal(engine.getStrategicRegions()[target.id].ownerId, 1, "the defender keeps the province");
 });
 
+test("a stalled strategic front ends instead of standing forever", () => {
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  for (let y = 450; y < 510; y++) {
+    for (let x = 500; x < 560; x++) owners[indexAt(x, y)] = 0;
+    for (let x = 560; x < 620; x++) owners[indexAt(x, y)] = 1;
+  }
+  const engine = engineFrom(owners);
+  engine.reset(1, "strategy", "world", "all");
+  const target = engine.getStrategicTargets(0).find(({ ownerId }) => ownerId === 1)!;
+  const internals = engine as unknown as {
+    beginStrategicCampaign: (attackerId: number, regionId: number) => { progress: number };
+    advanceStrategicCampaign: (campaign: { progress: number }, changed: number[]) => { text: string };
+    frontStrength: () => { ratio: number };
+    getStrategicRegionResistance: () => { factor: number };
+    random: () => number;
+  };
+  const campaign = internals.beginStrategicCampaign(0, target.id);
+  internals.frontStrength = () => ({ ratio: Math.SQRT1_2 });
+  internals.getStrategicRegionResistance = () => ({ factor: 1 });
+  internals.random = () => .5;
+  let record = { text: "" };
+  for (let round = 0; round < 4; round++) record = internals.advanceStrategicCampaign(campaign, []);
+  assert.equal(campaign.progress, 0);
+  assert.match(record.text, /wygasa po długim impasie/);
+});
+
 test("automatic planning exhausts legal actions before declaring a false stalemate", () => {
   const owners = new Int16Array(MAP_W * MAP_H);
   owners.fill(-1);

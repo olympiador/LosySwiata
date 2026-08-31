@@ -104,6 +104,7 @@ export type StrategicCampaign = {
   regionId: number;
   progress: number;
   turns: number;
+  stallTurns?: number;
   lastMomentum?: number;
   lastRandomFactor?: number;
 };
@@ -1964,9 +1965,11 @@ export class WorldEngine {
       && this.strategicCampaigns.some(({ defenderId }) => defenderId === this.playerCountryId);
     if (playerRedeploying) {
       campaign.progress = Math.max(0, campaign.progress - 2);
+      campaign.stallTurns = 0;
       campaign.lastMomentum = -2;
       campaign.lastRandomFactor = 1;
       campaign.turns++;
+      if (campaign.progress <= 0) return this.strategicRecord(campaign.attackerId, `Ofensywa o „${sector.name}” została wycofana, ponieważ wszystkie siły przerzucono do obrony kraju. Sektor pozostaje pod kontrolą państwa ${this.countries[campaign.defenderId].name}.`, campaign.defenderId);
       return this.strategicRecord(campaign.attackerId, `Ofensywa o „${sector.name}” została wstrzymana, ponieważ wojska przerzucono do obrony kraju. Postęp spada do ${Math.round(campaign.progress)}%.`, campaign.defenderId);
     }
     const front = this.frontStrength(campaign.attackerId, campaign.defenderId, campaign.regionId);
@@ -1983,6 +1986,11 @@ export class WorldEngine {
     campaign.turns++;
     if (campaign.progress >= 100) return this.captureStrategicRegion(campaign, changed);
     if (campaign.progress <= 0) return this.strategicRecord(campaign.attackerId, `Ofensywa państwa ${this.countries[campaign.attackerId].name} o „${this.strategicRegions[campaign.regionId].name}” załamuje się. Sektor pozostaje pod kontrolą państwa ${this.countries[campaign.defenderId].name}.`, campaign.defenderId);
+    campaign.stallTurns = Math.abs(momentum) < 1 ? (campaign.stallTurns ?? 0) + 1 : 0;
+    if (campaign.stallTurns >= 4) {
+      campaign.progress = 0;
+      return this.strategicRecord(campaign.attackerId, `Front o „${sector.name}” wygasa po długim impasie. ${this.countries[campaign.defenderId].name} utrzymuje sektor, a ${this.countries[campaign.attackerId].name} wycofuje siły.`, campaign.defenderId);
+    }
     const movement = momentum < -1 ? `front cofa się do ${Math.round(campaign.progress)}%` : Math.abs(momentum) <= 1 ? `front stoi w miejscu na ${Math.round(campaign.progress)}%` : `postęp ${Math.round(campaign.progress)}%`;
     const fortune = randomFactor >= 1.1 ? "sprzyjający przebieg działań" : randomFactor <= .9 ? "niekorzystny przebieg działań" : "typowy przebieg działań";
     return this.strategicRecord(campaign.attackerId, `${this.countries[campaign.attackerId].name} prowadzi ofensywę o „${this.strategicRegions[campaign.regionId].name}” — ${movement}; ${fortune}.`, campaign.defenderId);
@@ -4467,6 +4475,7 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
   if (candidate.strategicCampaigns !== undefined && (!Array.isArray(candidate.strategicCampaigns) || !candidate.strategicCampaigns.every((campaign) => campaign && typeof campaign === "object"
     && integer(campaign.id, 1) && integer(campaign.attackerId, 0) && integer(campaign.defenderId, 0) && integer(campaign.regionId, 0)
     && finite(campaign.progress, 0, 100) && integer(campaign.turns, 0)
+    && (campaign.stallTurns === undefined || integer(campaign.stallTurns, 0, 12))
     && (campaign.lastMomentum === undefined || finite(campaign.lastMomentum, -100, 100))
     && (campaign.lastRandomFactor === undefined || finite(campaign.lastRandomFactor, .5, 1.5))))) return false;
   if (candidate.strategicTerritoryLog !== undefined && (!Array.isArray(candidate.strategicTerritoryLog) || candidate.strategicTerritoryLog.length > 10_000
