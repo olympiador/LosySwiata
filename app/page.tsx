@@ -755,7 +755,12 @@ export default function Home() {
       const result = engine.advanceStrategicRound(targetRegionId);
       highlightRef.current = result.changedIndices;
       refresh(engine); autosave(engine); paint();
-      const finishedWar = result.completedWars.find((war) => war.attackerId === engine.playerCountryId || war.defenderId === engine.playerCountryId) ?? result.completedWars[0];
+      const playerNeighbours = new Set<number>();
+      if (engine.playerCountryId !== null) for (const region of engine.getStrategicRegions()) if (region.ownerId === engine.playerCountryId) for (const neighbourId of region.neighbours) {
+        const neighbour = engine.getStrategicRegions()[neighbourId];
+        if (neighbour && neighbour.ownerId !== engine.playerCountryId) playerNeighbours.add(neighbour.ownerId);
+      }
+      const finishedWar = result.completedWars.find((war) => war.attackerId === engine.playerCountryId || war.defenderId === engine.playerCountryId || playerNeighbours.has(war.attackerId) || playerNeighbours.has(war.defenderId));
       if (finishedWar) setWarReport(finishedWar);
       setStrategicTargetId(null);
       const playerCampaign = engine.getStrategicCampaigns().find(({ attackerId }) => attackerId === engine.playerCountryId);
@@ -1400,7 +1405,7 @@ export default function Home() {
               })}
             </div>}
             {battleArtifacts.length > 0 && <div className="war-scar-layer" aria-hidden="true" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}>
-              {battleArtifacts.slice(-160).map((artifact) => [-100, 0, 100].map((wrap) => <span key={`${artifact.id}:${wrap}`} className={`war-scar ${artifact.kind}`} style={{ left: `${artifact.x + wrap}%`, top: `${artifact.y}%`, opacity: Math.max(.24, 1 - Math.max(0, turn - artifact.turn) / 34) }} title="Ślady ostatnich walk">{artifact.kind === "burned" ? "♨" : "⚔"}</span>))}
+              {battleArtifacts.slice(-80).map((artifact) => [-100, 0, 100].map((wrap) => <span key={`${artifact.id}:${wrap}`} className={`war-scar ${artifact.kind}`} style={{ left: `${artifact.x + wrap}%`, top: `${artifact.y}%`, opacity: Math.max(.2, 1 - Math.max(0, turn - artifact.turn) / 34), transform: `translate(-50%,-50%) scale(${1 / zoom})` }} title="Ślady ostatnich walk">{artifact.kind === "burned" ? "♨" : "⚔"}</span>))}
             </div>}
             {battleFx && animationMode !== "off" && <div className={`battle-layer ${animationMode}`} aria-hidden="true" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}>
               {[-100, 0, 100].map((wrap) => <div key={`${battleFx.key}:${wrap}`} className={`battle-marker ${battleFx.phase}`} style={{ left: `${battleFx.x + wrap}%`, top: `${battleFx.y}%` }}>

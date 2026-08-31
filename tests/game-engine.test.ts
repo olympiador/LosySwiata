@@ -520,6 +520,7 @@ test("a much weaker strategic attacker can be repelled instead of gaining guaran
   engine.reset(777, "strategy", "world", "all");
   engine.setPlayerCountry(0);
   const target = engine.getStrategicTargets(0)[0];
+  const attackerPopulation = engine.getCountryPopulationAbsolute(0), defenderPopulation = engine.getCountryPopulationAbsolute(1);
   assert.ok(target, "the smaller country should have an adjacent target");
   const assessment = engine.getStrategicWarAssessment(0, 1);
   assert.ok(assessment.chance < 50 && ["risky", "danger"].includes(assessment.level));
@@ -535,6 +536,8 @@ test("a much weaker strategic attacker can be repelled instead of gaining guaran
   const war = engine.getStrategicWarHistory(0).at(-1);
   assert.equal(war?.outcome, "repelled");
   assert.ok((war?.attackerCasualties ?? 0) > 0 && (war?.defenderCasualties ?? 0) > 0, "a finished war records losses on both sides");
+  assert.ok(engine.getCountryPopulationAbsolute(0) < attackerPopulation, "battle losses reduce the attacking country's population");
+  assert.ok(engine.getCountryPopulationAbsolute(1) !== defenderPopulation, "the defending country's demographic state is recalculated after battle losses and migration");
   assert.ok(engine.getStrategicBattleArtifacts().some(({ regionId }) => regionId === target.id), "a battle leaves a persistent map artifact");
   const restored = engineFrom(owners);
   restored.load(engine.snapshot());

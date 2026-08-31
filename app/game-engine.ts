@@ -745,6 +745,7 @@ export class WorldEngine {
   private strategicOccupations: StrategicOccupation[] = [];
   private strategicBattleArtifacts: StrategicBattleArtifact[] = [];
   private strategicWarHistory: StrategicWarHistoryEntry[] = [];
+  private strategicPendingCasualties: number[] = [];
   private strategicLogisticsInvestments: LogisticsInvestment[] = [];
   private strategicExhaustion: number[] = [];
   private strategicDefenseState: StrategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 };
@@ -1111,7 +1112,12 @@ export class WorldEngine {
         // Countries with a rich, credible first-level division such as Brazil
         // retain it. This correction is for smaller sets distorted by one
         // administrative outlier, not a replacement for national geography.
-        if (adminIds.length < 4 || adminIds.length > 15) continue;
+        const countryCells = adminIds.reduce((sum, id) => sum + administrativeCounts[id], 0);
+        // Large countries must keep their real province boundaries. In
+        // particular, slicing Karakalpakstan created artificial horizontal
+        // stripes across Uzbekistan. The balancing correction is reserved for
+        // compact states whose atlas has a single extreme outlier.
+        if (adminIds.length < 4 || adminIds.length > 15 || countryCells > 2_700 || this.countries[ownerId]?.iso === "UZ") continue;
         const ordered = adminIds.map((id) => administrativeCounts[id]).sort((a, b) => a - b);
         const median = ordered[Math.floor(ordered.length / 2)];
         const outlierThreshold = Math.max(140, median * 3);
@@ -1490,6 +1496,7 @@ export class WorldEngine {
     this.strategicOccupations = [];
     this.strategicBattleArtifacts = [];
     this.strategicWarHistory = [];
+    this.strategicPendingCasualties = this.countries.map(() => 0);
     this.strategicExhaustion = this.countries.map(() => 0);
     this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 };
     this.nextCampaignId = 1;
@@ -1972,11 +1979,17 @@ export class WorldEngine {
   private recordStrategicBattle(campaign: StrategicCampaign, momentum: number, front: StrategicFrontStrength) {
     const sector = this.strategicRegions[campaign.regionId];
     if (!sector) return;
-    const scale = Math.max(35, Math.min(1_800, 55 + sector.areaKm2 / 1_800));
+    // A quarterly campaign represents repeated combat, artillery fire and
+    // losses on the supply line, not one skirmish. Small sectors cost
+    // thousands, while a prolonged fight for a very large sector can cost far
+    // more. Values remain explicit model estimates in the report.
+    const scale = Math.max(4_000, Math.min(200_000, 3_000 + sector.areaKm2 / 12));
     const attackLosses = Math.round(scale * (.55 + Math.max(0, 1 / Math.max(.25, front.ratio) - .55) + Math.max(0, -momentum) * .035));
     const defenseLosses = Math.round(scale * (.45 + Math.max(0, front.ratio - .65) * .55 + Math.max(0, momentum) * .03));
     campaign.attackerCasualties = (campaign.attackerCasualties ?? 0) + attackLosses;
     campaign.defenderCasualties = (campaign.defenderCasualties ?? 0) + defenseLosses;
+    this.applyStrategicCasualties(campaign.attackerId, attackLosses);
+    this.applyStrategicCasualties(campaign.defenderId, defenseLosses);
     campaign.battles = (campaign.battles ?? 0) + 1;
     const intensity = Math.min(100, Math.round(35 + Math.abs(momentum) * 4 + (attackLosses + defenseLosses) / Math.max(1, scale) * 20));
     this.strategicBattleArtifacts = [...this.strategicBattleArtifacts, {
@@ -1990,6 +2003,23 @@ export class WorldEngine {
       intensity,
       kind: intensity >= 64 ? "burned" as const : "battle" as const,
     }].slice(-320);
+  }
+
+  private applyStrategicCasualties(countryId: number, casualties: number) {
+    if (casualties <= 0) return;
+    this.strategicPendingCasualties[countryId] = (this.strategicPendingCasualties[countryId] ?? 0) + casualties;
+  }
+
+  private settleStrategicCasualties() {
+    for (let countryId = 0; countryId < this.strategicPendingCasualties.length; countryId++) {
+      const casualties = this.strategicPendingCasualties[countryId] ?? 0;
+      const state = this.countryCapabilityStates[countryId];
+      if (!state || casualties <= 0) continue;
+      state.populationAbsolute = Math.max(0, state.populationAbsolute - casualties);
+      state.components.population = Math.max(0, state.components.population - casualties / 1_000_000);
+      state.manpower.available = Math.max(0, state.manpower.available - Math.max(1, Math.round(casualties / 8_000)));
+      this.strategicPendingCasualties[countryId] = 0;
+    }
   }
 
   private finishStrategicWar(campaign: StrategicCampaign, outcome: StrategicWarHistoryEntry["outcome"], completedWars: StrategicWarHistoryEntry[]) {
@@ -2179,6 +2209,7 @@ export class WorldEngine {
       return campaign.attackerId === this.playerCountryId && ownerId !== campaign.attackerId;
     });
     this.advanceCapabilityStates();
+    this.settleStrategicCasualties();
     if (this.playerCountryId !== null) {
       const incoming = this.strategicCampaigns.filter(({ defenderId, regionId }) => defenderId === this.playerCountryId && this.strategicRegions[regionId]?.ownerId === this.playerCountryId);
       if (!incoming.length) {
@@ -3670,7 +3701,7 @@ export class WorldEngine {
     this.playerPolicyState.activePolicies = [];
     this.playerPolicyState.decisions = createPlayerPolicyDecisionDefaults();
     if (mode === "strategy") this.buildStrategicRegions();
-    else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
+    else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
     this.visualRevision++;
   }
 
@@ -3792,6 +3823,7 @@ export class WorldEngine {
       this.strategicTerritoryLog = currentStrategicSchema ? snapshot.strategicTerritoryLog?.map((event) => ({ ...event, provinceNames: [...event.provinceNames] })) ?? [] : [];
       this.strategicBattleArtifacts = snapshot.strategicBattleArtifacts?.map((artifact) => ({ ...artifact })) ?? [];
       this.strategicWarHistory = snapshot.strategicWarHistory?.map((war) => ({ ...war })) ?? [];
+      this.strategicPendingCasualties = this.countries.map(() => 0);
       this.strategicOccupations = snapshot.strategicRegionSchema === 5 && snapshot.strategicOccupations
         ? snapshot.strategicOccupations.map((occupation) => ({ ...occupation }))
         : this.strategicRegions.filter(({ ownerId, originalOwnerId }) => ownerId !== originalOwnerId).map((region) => ({
@@ -3803,7 +3835,7 @@ export class WorldEngine {
         ? { ...snapshot.strategicDefenseState }
         : { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 };
       this.nextCampaignId = Math.max(0, ...this.strategicCampaigns.map(({ id }) => id)) + 1;
-    } else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
+    } else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
     if ((snapshot.mapRevision ?? 0) >= CURRENT_MAP_REVISION && snapshot.colors?.length === this.countries.length && snapshot.colors.every((color) => color.length === 3 && color.every(Number.isFinite))) {
       snapshot.colors.forEach((color, id) => { this.countries[id].color = [color[0], color[1], color[2]]; });
     } else {

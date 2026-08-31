@@ -291,7 +291,10 @@ export function refugeeFlowFrom(warIntensity: number, immigrationPolicy: BorderP
 function applyRefugeeFlow(state: CountryCapabilityState, flow: number): { state: CountryCapabilityState; refugeesIn: number } {
   if (flow <= 0) return { state, refugeesIn: 0 };
   const workingAge = 0.7, children = 0.2, elderly = 0.1;
-  const absorbed = Math.min(state.populationAbsolute * 0.3, flow * 1_000_000);
+  // A quarter of war must not create hundreds of thousands of residents from
+  // a single abstract migration tick. Refugees are meaningful, but battle
+  // casualties must remain visible in the country's population balance.
+  const absorbed = Math.min(state.populationAbsolute * 0.003, flow * 25_000);
   const newWorking = absorbed * workingAge;
   const newChildren = absorbed * children;
   const newElderly = absorbed * elderly;
