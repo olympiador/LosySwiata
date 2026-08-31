@@ -294,6 +294,7 @@ const WAR_SIZES: SizeKey[] = ["all", "large", "big", "medium", "small", "tiny"];
 const OTHER_SIZES: SizeKey[] = ["large", "big", "medium", "small", "tiny"];
 const POLISH_NAME_OVERRIDES: Record<string, string> = {
   CI: "Wybrzeże Kości Słoniowej",
+  GF: "Gujana Francuska",
 };
 const POLISH_CAPITAL_OVERRIDES: Record<string, string> = {
   AE: "Abu Zabi", AM: "Erywań", AT: "Wiedeń", BE: "Bruksela", BG: "Sofia", BY: "Mińsk",
@@ -413,6 +414,24 @@ function separateCountriesByWater(owners: Int16Array, countries: Country[], firs
     if (touches) carve.push(index);
   }
   carve.forEach((index) => { owners[index] = -1; });
+}
+
+// Alternate-history rule of this game: French Guiana is a sovereign country.
+// Admin-1 cells give it a precise outline without inventing a rectangular map
+// shape or changing France's European territory.
+export function assignFrenchGuianaOwner(owners: Int16Array, administrative: Int16Array, franceId: number, frenchGuianaId: number) {
+  if (owners.length !== administrative.length || franceId < 0 || frenchGuianaId < 0) return 0;
+  let assigned = 0;
+  for (let index = 0; index < owners.length; index++) {
+    if (owners[index] !== franceId || ADMIN1_NAMES[administrative[index]] !== "Gujana Francuska") continue;
+    owners[index] = frenchGuianaId;
+    assigned++;
+  }
+  return assigned;
+}
+
+function administrativeOwnerIso(adminId: number) {
+  return ADMIN1_NAMES[adminId] === "Gujana Francuska" ? "GF" : ADMIN1_ISO[adminId];
 }
 
 function assignMapColors(countries: Country[], owners: Int16Array) {
@@ -802,6 +821,21 @@ export class WorldEngine {
         capital: capital ? { name: POLISH_CAPITAL_OVERRIDES[row.cca2] ?? capital[0], latitude: capital[1], longitude: capital[2] } : undefined,
       };
     });
+    const frenchGuianaRow = rows.find((row) => row.cca2 === "GF");
+    if (frenchGuianaRow) {
+      const id = countries.length, capital = CAPITALS.GF;
+      countries.push({
+        id,
+        iso: "GF",
+        iso3: "GUF",
+        name: POLISH_NAME_OVERRIDES.GF,
+        flag: frenchGuianaRow.flag ?? "🇬🇫",
+        color: hslToRgb((id * 137.508 + 17) % 360, 60 + (id % 3) * 3, 47 + (id % 4) * 2),
+        initialWeight: 0,
+        region: classifyGameRegion("GF", frenchGuianaRow.region, frenchGuianaRow.subregion),
+        capital: capital ? { name: POLISH_CAPITAL_OVERRIDES.GF ?? capital[0], latitude: capital[1], longitude: capital[2] } : undefined,
+      });
+    }
 
     const rasterize = (entries: MappedCountry[], width: number, height: number) => {
       const projection = geoEquirectangular().translate([width / 2, height / 2]).scale(width / (2 * Math.PI)).precision(Math.max(0.08, 144 / width));
@@ -919,9 +953,10 @@ export class WorldEngine {
     const owners = rasterize(usable, MAP_W, MAP_H);
     assignCrimeaToUkraine(owners, countries);
     separateCountriesByWater(owners, countries, "DK", "SE");
-    assignMapColors(countries, owners);
     const legacyOwners = rasterizePrevious(legacyUsable, LEGACY_MAP_W, LEGACY_MAP_H);
     const [elevation, administrative, airports, ports] = await Promise.all([terrain, admin1, loadAirports(), loadPorts()]);
+    assignFrenchGuianaOwner(owners, administrative, countries.find((country) => country.iso === "FR")?.id ?? -1, countries.find((country) => country.iso === "GF")?.id ?? -1);
+    assignMapColors(countries, owners);
     return new WorldEngine(countries, owners, legacyOwners, seed, elevation, administrative, airports, ports);
   }
 
@@ -1005,6 +1040,7 @@ export class WorldEngine {
     let neighbourSets: Array<Set<number>> = [];
     let sumsX: number[] = [], sumsY: number[] = [], weights: number[] = [];
     const byKey = new Map<string, number>();
+    const ownersWithSubdivision = new Set<number>();
     const createRegion = (key: string, originalOwnerId: number, name: string) => {
       const known = byKey.get(key);
       if (known !== undefined) return known;
@@ -1017,11 +1053,50 @@ export class WorldEngine {
 
     const hasRealAdministrativeMap = this.admin1At.length === this.initialOwners.length;
     if (hasRealAdministrativeMap) {
+      // Some states have one enormous first-level unit beside a handful of
+      // tiny coastal ones, for example Sipaliwini in Suriname. Split only an
+      // extreme outlier along its real Admin-1 shape before balancing sectors.
+      // This keeps every generated sector inside the geographic boundary.
+      const administrativeCounts = new Uint32Array(ADMIN1_ISO.length);
+      const administrativeMinY = new Int32Array(ADMIN1_ISO.length), administrativeMaxY = new Int32Array(ADMIN1_ISO.length);
+      administrativeMinY.fill(MAP_H); administrativeMaxY.fill(-1);
+      const administrativeByOwner = new Map<number, number[]>();
+      const listedAdministrative = new Uint8Array(ADMIN1_ISO.length);
+      for (let index = 0; index < this.initialOwners.length; index++) {
+        const ownerId = this.initialOwners[index], adminId = this.admin1At[index];
+        if (ownerId < 0 || adminId < 0 || administrativeOwnerIso(adminId) !== this.countries[ownerId]?.iso) continue;
+        administrativeCounts[adminId]++;
+        const y = Math.floor(index / MAP_W);
+        administrativeMinY[adminId] = Math.min(administrativeMinY[adminId], y);
+        administrativeMaxY[adminId] = Math.max(administrativeMaxY[adminId], y);
+        const list = administrativeByOwner.get(ownerId) ?? [];
+        if (!listedAdministrative[adminId]) { listedAdministrative[adminId] = 1; list.push(adminId); administrativeByOwner.set(ownerId, list); }
+      }
+      const administrativeSlices = new Uint8Array(ADMIN1_ISO.length);
+      administrativeSlices.fill(1);
+      for (const [ownerId, adminIds] of administrativeByOwner) {
+        // Countries with a rich, credible first-level division such as Brazil
+        // retain it. This correction is for smaller sets distorted by one
+        // administrative outlier, not a replacement for national geography.
+        if (adminIds.length < 4 || adminIds.length > 15) continue;
+        const ordered = adminIds.map((id) => administrativeCounts[id]).sort((a, b) => a - b);
+        const median = ordered[Math.floor(ordered.length / 2)];
+        const outlierThreshold = Math.max(140, median * 3);
+        for (const adminId of adminIds) {
+          if (administrativeCounts[adminId] < outlierThreshold * 2) continue;
+          const verticalCells = administrativeMaxY[adminId] - administrativeMinY[adminId] + 1;
+          administrativeSlices[adminId] = Math.max(1, Math.min(5, verticalCells, Math.ceil(administrativeCounts[adminId] / outlierThreshold)));
+          if (administrativeSlices[adminId] > 1) ownersWithSubdivision.add(ownerId);
+        }
+      }
       const ownerHasAdmin = new Uint8Array(this.countries.length);
       for (let index = 0; index < this.initialOwners.length; index++) {
         const originalOwnerId = this.initialOwners[index], adminId = this.admin1At[index];
-        if (originalOwnerId < 0 || adminId < 0 || ADMIN1_ISO[adminId] !== this.countries[originalOwnerId]?.iso) continue;
-        provinceAt[index] = createRegion(`adm1:${adminId}`, originalOwnerId, ADMIN1_NAMES[adminId]);
+        if (originalOwnerId < 0 || adminId < 0 || administrativeOwnerIso(adminId) !== this.countries[originalOwnerId]?.iso) continue;
+        const slices = administrativeSlices[adminId];
+        const slice = slices > 1 ? Math.min(slices - 1, Math.floor((Math.floor(index / MAP_W) - administrativeMinY[adminId]) * slices / Math.max(1, administrativeMaxY[adminId] - administrativeMinY[adminId] + 1))) : 0;
+        const name = slices > 1 ? `${ADMIN1_NAMES[adminId]}, część ${slice + 1}` : ADMIN1_NAMES[adminId];
+        provinceAt[index] = createRegion(`adm1:${adminId}:${slice}`, originalOwnerId, name);
         ownerHasAdmin[originalOwnerId] = 1;
       }
 
@@ -1169,10 +1244,17 @@ export class WorldEngine {
       for (const ids of byOwner.values()) {
         const totalArea = ids.reduce((sum, id) => sum + regions[id].areaKm2, 0);
         const suggested = Math.max(1, Math.min(24, Math.round(Math.sqrt(totalArea / 1_300))));
+        const areas = ids.map((id) => regions[id].areaKm2).sort((a, b) => a - b);
+        const medianArea = areas[Math.floor(areas.length / 2)] ?? 0;
+        const hasExtremeOutlier = ownersWithSubdivision.has(regions[ids[0]]?.originalOwnerId ?? -1) && ids.length >= 4 && (areas[areas.length - 1] ?? 0) > Math.max(1, medianArea) * 4;
         // Countries whose source already contains a credible first-level set
         // (Brazil 27, Poland/Germany 16, Lithuania 10) keep every real unit.
         // Only pathological municipality/department layers are consolidated.
-        const target = ids.length <= 32 ? ids.length : suggested;
+        // An extreme area outlier is also consolidated after subdivision, so
+        // it cannot leave a state with one giant sector and tiny fragments.
+        const target = hasExtremeOutlier
+          ? Math.min(ids.length, Math.max(4, Math.min(8, Math.round(Math.sqrt(totalArea / 5_000)))))
+          : ids.length <= 32 ? ids.length : suggested;
         const clusters = new Map<number, Cluster>();
         const protectedIslandIds = new Set(ids.filter((id) => {
           const region = regions[id], iso = this.countries[region.originalOwnerId]?.iso;

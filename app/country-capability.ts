@@ -126,6 +126,26 @@ function defaultPyramid(): DemographicPyramid {
   return { children: 0.18, youth: 0.12, primeAge: 0.34, middleAge: 0.22, elderly: 0.11, veryOld: 0.03 };
 }
 
+function demographicSignal(iso3: string) {
+  return [...iso3].reduce((value, letter, index) => (value * 31 + letter.charCodeAt(0) * (index + 3)) % 10_007, 17) / 10_007;
+}
+
+// The game has country population totals, but not a licensed worldwide age
+// table. Start from a demographic estimate that reflects development and
+// differs by country, then let policies, migration and war change it in play.
+function initialDemographics(country: Country, components: StrategicComponents): DemographicPyramid {
+  const signal = demographicSignal(country.iso3 ?? country.iso) - .5;
+  const development = (components.economy * .45 + components.technology * .55) / 100;
+  const children = clamp(.30 - development * .16 + signal * .045, .11, .32);
+  const youth = clamp(.145 - development * .025 - signal * .018, .085, .16);
+  const elderly = clamp(.045 + development * .105 - signal * .025, .035, .16);
+  const veryOld = clamp(.009 + development * .038 + signal * .009, .008, .06);
+  const middleAge = clamp(.185 + development * .055 - signal * .012, .16, .26);
+  const primeAge = Math.max(.12, 1 - children - youth - middleAge - elderly - veryOld);
+  const total = children + youth + primeAge + middleAge + elderly + veryOld;
+  return { children: children / total, youth: youth / total, primeAge: primeAge / total, middleAge: middleAge / total, elderly: elderly / total, veryOld: veryOld / total };
+}
+
 function defaultProximity(): CulturalProximity { return {}; }
 
 function initialRegimeType(countryId: number): RegimeType {
@@ -200,7 +220,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       components.population = clamp(fallbackPop / 1_000_000, 0, 45);
       populationAbsolute = components.population * 1_000_000;
     }
-    const demographics = defaultPyramid();
+    const demographics = initialDemographics(country, components);
     const culturalProximity = defaultProximity();
     return {
       components,
@@ -213,7 +233,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       manpower: initialManpower(country.id),
       populationAbsolute,
       demographics,
-      demographicType: "chimney",
+      demographicType: demographicType(demographics),
       borderPolicy: "selective",
       logisticsInvestments: [],
       culturalProximity,

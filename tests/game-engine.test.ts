@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { inflateSync } from "node:zlib";
-import { assignCrimeaToUkraine, circularColumnSpan, classifyGameRegion, curatedFortificationBaseline, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
+import { assignCrimeaToUkraine, assignFrenchGuianaOwner, circularColumnSpan, classifyGameRegion, curatedFortificationBaseline, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
 import { evaluateCapabilityChange, initialCapabilityStates, loadCapabilityStatesFromSnapshot } from "../app/country-capability";
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_ISO, ADMIN1_NAMES } from "../app/admin1-data";
 import { REAL_AIRPORTS_DEFLATE_BASE64 } from "../app/airport-data";
@@ -70,6 +70,24 @@ test("legacy capability saves keep their progress and original regime", () => {
   assert.equal(restored[0].components.military, 70);
   assert.equal(restored[0].populationAbsolute, 144_000_000);
   assert.equal(restored[0].regimeType, "authoritarian");
+});
+
+test("initial demographic pyramids differ by country development", () => {
+  const states = initialCapabilityStates([
+    { ...countries[0], iso: "PL", iso3: "POL" },
+    { ...countries[1], iso: "KP", iso3: "PRK" },
+  ]);
+  assert.notDeepEqual(states[0].demographics, states[1].demographics);
+  assert.ok(states[0].demographics.elderly > states[1].demographics.elderly);
+});
+
+test("French Guiana can be assigned as the game's independent country", () => {
+  const guianaAdmin = ADMIN1_NAMES.indexOf("Gujana Francuska");
+  assert.ok(guianaAdmin >= 0);
+  const owners = new Int16Array([3, 3, 4]);
+  const administrative = new Int16Array([guianaAdmin, -1, guianaAdmin]);
+  assert.equal(assignFrenchGuianaOwner(owners, administrative, 3, 7), 1);
+  assert.deepEqual([...owners], [7, 3, 4]);
 });
 
 test("capability evaluation does not shorten logistics investments a second time", () => {
@@ -442,6 +460,18 @@ test("Brazil and Lithuania keep their real first-level region counts", () => {
   const regions = engine.getStrategicRegions();
   assert.equal(regions.filter(({ originalOwnerId }) => originalOwnerId === 0).length, 27);
   assert.equal(regions.filter(({ originalOwnerId }) => originalOwnerId === 1).length, 10);
+});
+
+test("a huge Suriname district is split before strategic sectors are balanced", () => {
+  const inflated = inflateSync(Buffer.from(ADMIN1_DEFLATE_BASE64, "base64"));
+  const admin1At = new Int16Array(inflated.buffer, inflated.byteOffset, inflated.byteLength / 2);
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  for (let index = 0; index < admin1At.length; index++) if (admin1At[index] >= 0 && ADMIN1_ISO[admin1At[index]] === "SR") owners[index] = 0;
+  const engine = engineFrom(owners, undefined, [{ ...countries[0], iso: "SR", name: "Surinam" }], admin1At);
+  engine.reset(1, "strategy", "world", "all");
+  const regions = engine.getStrategicRegions().filter(({ originalOwnerId }) => originalOwnerId === 0);
+  assert.ok(regions.length >= 4 && regions.length <= 8, `Suriname should have balanced sectors, got ${regions.length}`);
+  assert.ok(regions.some(({ provinceNames }) => provinceNames.some((name) => name.includes("Sipaliwini, część"))));
 });
 
 test("area and strategic strength correct flat-map distortion by latitude", () => {
