@@ -108,6 +108,10 @@ export type StrategicCampaign = {
   attackerCasualties?: number;
   defenderCasualties?: number;
   battles?: number;
+  refugeesFled?: number;
+  refugeesFledWomen?: number;
+  refugeesFledMen?: number;
+  refugeesFledChildren?: number;
   lastMomentum?: number;
   lastRandomFactor?: number;
 };
@@ -144,6 +148,10 @@ export type StrategicWarHistoryEntry = {
   attackerCasualties: number;
   defenderCasualties: number;
   battles: number;
+  refugeesFled: number;
+  refugeesFledWomen: number;
+  refugeesFledMen: number;
+  refugeesFledChildren: number;
 };
 
 export type StrategicTerritoryEvent = {
@@ -1975,7 +1983,7 @@ export class WorldEngine {
     const region = this.strategicRegions[regionId];
     if (!region || region.ownerId === attackerId || !this.getStrategicTargets(attackerId).some(({ id }) => id === regionId)) return null;
     if (this.strategicCampaigns.some((campaign) => campaign.attackerId === attackerId)) return null;
-    const campaign: StrategicCampaign = { id: this.nextCampaignId++, attackerId, defenderId: region.ownerId, regionId, progress: 6 + this.random() * 9, turns: 0, attackerCasualties: 0, defenderCasualties: 0, battles: 0 };
+    const campaign: StrategicCampaign = { id: this.nextCampaignId++, attackerId, defenderId: region.ownerId, regionId, progress: 6 + this.random() * 9, turns: 0, attackerCasualties: 0, defenderCasualties: 0, battles: 0, refugeesFled: 0, refugeesFledWomen: 0, refugeesFledMen: 0, refugeesFledChildren: 0 };
     this.strategicCampaigns.push(campaign);
     return campaign;
   }
@@ -2038,6 +2046,10 @@ export class WorldEngine {
       attackerCasualties: campaign.attackerCasualties ?? 0,
       defenderCasualties: campaign.defenderCasualties ?? 0,
       battles: campaign.battles ?? 0,
+      refugeesFled: campaign.refugeesFled ?? 0,
+      refugeesFledWomen: campaign.refugeesFledWomen ?? 0,
+      refugeesFledMen: campaign.refugeesFledMen ?? 0,
+      refugeesFledChildren: campaign.refugeesFledChildren ?? 0,
     };
     this.strategicWarHistory = [...this.strategicWarHistory, war].slice(-1_000);
     completedWars.push(war);
@@ -2481,6 +2493,22 @@ export class WorldEngine {
         incomingWomen[id] += amount * profile.women;
         incomingMen[id] += amount * profile.men;
         incomingChildren[id] += amount * profile.children;
+      }
+      let allocated = 0;
+      for (const campaign of fronts) {
+        const amount = Math.floor(requested / fronts.length);
+        allocated += amount;
+        campaign.refugeesFled = (campaign.refugeesFled ?? 0) + amount;
+        campaign.refugeesFledWomen = (campaign.refugeesFledWomen ?? 0) + Math.round(amount * profile.women);
+        campaign.refugeesFledMen = (campaign.refugeesFledMen ?? 0) + Math.round(amount * profile.men);
+        campaign.refugeesFledChildren = (campaign.refugeesFledChildren ?? 0) + amount - Math.round(amount * profile.women) - Math.round(amount * profile.men);
+      }
+      if (allocated < requested && fronts[0]) {
+        const amount = requested - allocated;
+        fronts[0].refugeesFled = (fronts[0].refugeesFled ?? 0) + amount;
+        fronts[0].refugeesFledWomen = (fronts[0].refugeesFledWomen ?? 0) + Math.round(amount * profile.women);
+        fronts[0].refugeesFledMen = (fronts[0].refugeesFledMen ?? 0) + Math.round(amount * profile.men);
+        fronts[0].refugeesFledChildren = (fronts[0].refugeesFledChildren ?? 0) + amount - Math.round(amount * profile.women) - Math.round(amount * profile.men);
       }
       outgoing[sourceId] += requested;
     }
@@ -3899,7 +3927,13 @@ export class WorldEngine {
       this.strategicCampaigns = currentStrategicSchema ? snapshot.strategicCampaigns?.map((campaign) => ({ ...campaign })) ?? [] : [];
       this.strategicTerritoryLog = currentStrategicSchema ? snapshot.strategicTerritoryLog?.map((event) => ({ ...event, provinceNames: [...event.provinceNames] })) ?? [] : [];
       this.strategicBattleArtifacts = snapshot.strategicBattleArtifacts?.map((artifact) => ({ ...artifact })) ?? [];
-      this.strategicWarHistory = snapshot.strategicWarHistory?.map((war) => ({ ...war })) ?? [];
+      this.strategicWarHistory = snapshot.strategicWarHistory?.map((war) => ({
+        ...war,
+        refugeesFled: war.refugeesFled ?? 0,
+        refugeesFledWomen: war.refugeesFledWomen ?? 0,
+        refugeesFledMen: war.refugeesFledMen ?? 0,
+        refugeesFledChildren: war.refugeesFledChildren ?? 0,
+      })) ?? [];
       this.strategicPendingCasualties = this.countries.map(() => 0);
       this.strategicOccupations = snapshot.strategicRegionSchema === 5 && snapshot.strategicOccupations
         ? snapshot.strategicOccupations.map((occupation) => ({ ...occupation }))
@@ -4697,12 +4731,18 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
       && integer(artifact.attackerId, 0) && integer(artifact.defenderId, 0)
       && finite(artifact.x, 0, 100) && finite(artifact.y, 0, 100) && finite(artifact.intensity, 0, 100)
       && (artifact.kind === "battle" || artifact.kind === "burned")))) return false;
-  if (candidate.strategicWarHistory !== undefined && (!Array.isArray(candidate.strategicWarHistory) || candidate.strategicWarHistory.length > 1_000
-    || !candidate.strategicWarHistory.every((war) => war && typeof war === "object"
+  if (candidate.strategicWarHistory !== undefined) {
+    if (!Array.isArray(candidate.strategicWarHistory) || candidate.strategicWarHistory.length > 1_000) return false;
+    if (!candidate.strategicWarHistory.every((war) => war && typeof war === "object"
       && integer(war.id, 1) && integer(war.attackerId, 0) && integer(war.defenderId, 0) && integer(war.regionId, 0)
       && integer(war.startedTurn, 1) && integer(war.endedTurn, 1) && war.endedTurn >= war.startedTurn
       && ["captured", "repelled", "withdrawn", "stalemate"].includes(war.outcome as string)
-      && integer(war.attackerCasualties, 0, 10_000_000) && integer(war.defenderCasualties, 0, 10_000_000) && integer(war.battles, 0, 10_000)))) return false;
+      && integer(war.attackerCasualties, 0, 10_000_000) && integer(war.defenderCasualties, 0, 10_000_000) && integer(war.battles, 0, 10_000)
+      && (war.refugeesFled === undefined || integer(war.refugeesFled, 0, 100_000_000))
+      && (war.refugeesFledWomen === undefined || integer(war.refugeesFledWomen, 0, 100_000_000))
+      && (war.refugeesFledMen === undefined || integer(war.refugeesFledMen, 0, 100_000_000))
+      && (war.refugeesFledChildren === undefined || integer(war.refugeesFledChildren, 0, 100_000_000)))) return false;
+  }
   if (candidate.strategicExhaustion !== undefined && (!Array.isArray(candidate.strategicExhaustion) || !candidate.strategicExhaustion.every((value) => finite(value, 0, 100)))) return false;
   if (candidate.strategicDefenseState !== undefined) {
     const defense = candidate.strategicDefenseState;
