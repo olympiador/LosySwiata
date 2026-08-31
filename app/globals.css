@@ -223,3 +223,14 @@
 .war-demographic-impact > div { display: grid; gap: 2px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, .08); }
 .war-demographic-impact small { color: var(--muted2); font-size: 8px; }
 .war-demographic-impact b { color: #e5f5f0; font-size: 10px; }
+
+.city-layer,.capital-layer { position: absolute; z-index: 6; inset: 0; pointer-events: none; }
+.city-marker { position: absolute; display: inline-flex; align-items: center; gap: 3px; color: #d8ebd0; font-size: 7px; transform: translate(-50%, -50%); text-shadow: 0 1px 3px #061119; }
+.city-marker i { color: #b8e19f; font-size: 7px; font-style: normal; filter: drop-shadow(0 0 3px rgba(158, 226, 129, .7)); }
+.city-marker b { padding: 2px 3px; border-radius: 3px; background: rgba(4, 17, 23, .68); color: #dceee5; font-size: 7px; font-weight: 750; white-space: nowrap; }
+.city-marker.occupied i { color: #e8927d; }
+.capital-relocation-options { display: grid; gap: 7px; }
+.capital-relocation-options button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 10px; border: 1px solid rgba(133, 205, 190, .27); border-radius: 8px; background: rgba(39, 115, 102, .13); color: #eaf6f2; cursor: pointer; text-align: left; }
+.capital-relocation-options button:hover { border-color: rgba(161, 232, 214, .72); background: rgba(54, 135, 119, .25); }
+.capital-relocation-options small { color: var(--muted); font-size: 8px; }
+.capital-relocation-options em { grid-row: span 2; align-self: center; color: #9edfd3; font-size: 8px; font-style: normal; font-weight: 850; }

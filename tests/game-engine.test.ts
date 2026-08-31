@@ -313,6 +313,33 @@ test("wartime refugees cross into eligible neighbouring countries, never automat
   assert.ok((engine.getCountryCapabilityState(2)?.refugeesHosted ?? 0) > 0, "an open, safe neighbour should receive refugees");
 });
 
+test("losing the capital sector requires the player to choose a surviving regional seat", () => {
+  const sourceCountries: Country[] = [
+    { ...countries[0], id: 0, iso: "AA", name: "Państwo gracza", capital: { name: "Stara Stolica", latitude: 48.3, longitude: -130 } },
+    { ...countries[1], id: 1, iso: "BB", name: "Najeźdźca" },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  for (let y = 470; y < 650; y++) {
+    for (let x = 500; x < 720; x++) owners[indexAt(x, y)] = 0;
+    for (let x = 720; x < 940; x++) owners[indexAt(x, y)] = 1;
+  }
+  for (let y = 800; y < 980; y++) for (let x = 500; x < 720; x++) owners[indexAt(x, y)] = 0;
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  engine.reset(1357, "strategy", "world", "all");
+  engine.setPlayerCountry(0);
+  const target = engine.getStrategicTargets(1).find(({ ownerId }) => ownerId === 0)!;
+  const internal = engine as unknown as { beginStrategicCampaign: (attackerId: number, regionId: number) => unknown; strategicCampaigns: Array<{ progress: number }> };
+  internal.beginStrategicCampaign(1, target.id);
+  internal.strategicCampaigns[0].progress = 99;
+  (engine as unknown as { random: () => number }).random = () => 1;
+  engine.advanceStrategicRound();
+  const options = engine.getCapitalRelocationOptions(0);
+  assert.ok(options.length > 0, "a player who retains territory must choose a replacement capital");
+  assert.equal(engine.relocatePlayerCapital(options[0].regionId), true);
+  assert.equal(engine.getCapitalRelocationOptions(0).length, 0);
+  assert.equal(engine.getCapitalPlacements().find(({ countryId }) => countryId === 0)?.relocated, true);
+});
+
 test("a neighbouring AI country can put pressure on a strong player country", () => {
   const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
   for (let y = 400; y < 620; y++) {

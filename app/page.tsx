@@ -53,6 +53,8 @@ import {
   type ActionKey,
   type Country,
   type CapitalPlacement,
+  type StrategicCityPlacement,
+  type StrategicCapitalRelocationOption,
   type CountryLabelPlacement,
   type CountryRanking,
   type Direction,
@@ -1332,11 +1334,18 @@ export default function Home() {
     return x > -100 && x < mapSize.width + 100 && y > -60 && y < mapSize.height + 60 ? [{ ...label, wrap }] : [];
   })), [mapLabels, mapSize, pan, zoom]);
   const capitalPlacements: CapitalPlacement[] = useMemo(() => engine?.getCapitalPlacements() ?? [], [dataVersion, engine]);
+  const cityPlacements: StrategicCityPlacement[] = useMemo(() => engine?.getStrategicCityPlacements() ?? [], [dataVersion, engine]);
   const visibleCapitals = useMemo(() => capitalPlacements.flatMap((capital) => [-1, 0, 1].flatMap((wrap) => {
     const left = mapSize.width / 2 + pan.x + (capital.x / 100 + wrap - .5) * mapSize.width * zoom;
     const top = mapSize.height / 2 + pan.y + (capital.y / 100 - .5) * mapSize.height * zoom;
     return left > -70 && left < mapSize.width + 70 && top > -35 && top < mapSize.height + 35 ? [{ ...capital, wrap, left, top }] : [];
   })), [capitalPlacements, mapSize, pan, zoom]);
+  const visibleCities = useMemo(() => cityPlacements.flatMap((city) => [-1, 0, 1].flatMap((wrap) => {
+    const left = mapSize.width / 2 + pan.x + (city.x / 100 + wrap - .5) * mapSize.width * zoom;
+    const top = mapSize.height / 2 + pan.y + (city.y / 100 - .5) * mapSize.height * zoom;
+    return left > -30 && left < mapSize.width + 30 && top > -30 && top < mapSize.height + 30 ? [{ ...city, wrap, left, top }] : [];
+  })), [cityPlacements, mapSize, pan, zoom]);
+  const capitalRelocationOptions: StrategicCapitalRelocationOption[] = useMemo(() => engine && playerCountryId !== null ? engine.getCapitalRelocationOptions(playerCountryId) : [], [dataVersion, engine, playerCountryId]);
 
   return (
     <main className="app-shell" id="top">
@@ -1405,6 +1414,9 @@ export default function Home() {
                 const showName = capitalDisplay === "labels" && zoom >= 5.5;
                 return <span key={`${capital.countryId}:${capital.wrap}`} className={`capital-marker ${capital.controlled ? "" : "occupied"} ${zoom < 2 ? "overview" : ""} ${showName ? "named" : ""}`} style={{ left: capital.left, top: capital.top }}><i>★</i>{showName && <b>{capital.name}</b>}</span>;
               })}
+            </div>}
+            {gameMode === "strategy" && zoom >= 1.35 && <div className="city-layer" aria-hidden="true">
+              {visibleCities.map((city) => <span key={`${city.id}:${city.wrap}`} className={`city-marker ${city.controlled ? "" : "occupied"}`} style={{ left: city.left, top: city.top }} title={city.name}><i>◆</i>{zoom >= 7 && <b>{city.name.replace("Siedziba ", "")}</b>}</span>)}
             </div>}
             {battleArtifacts.length > 0 && <div className="war-scar-layer" aria-hidden="true" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}>
               {battleArtifacts.slice(-80).map((artifact) => [-100, 0, 100].map((wrap) => <span key={`${artifact.id}:${wrap}`} className={`war-scar ${artifact.kind}`} style={{ left: `${artifact.x + wrap}%`, top: `${artifact.y}%`, opacity: Math.max(.2, 1 - Math.max(0, turn - artifact.turn) / 34), transform: `translate(-50%,-50%) scale(${1 / zoom})` }} title="Ślady ostatnich walk">{artifact.kind === "burned" ? "♨" : "⚔"}</span>))}
@@ -1563,6 +1575,8 @@ export default function Home() {
       </section>
 
       <footer className="app-footer"><span>Mapa zapisuje się automatycznie na tym urządzeniu</span><span className="terrain-credit">Prowincje: Natural Earth Admin‑1 · Wysokości: ETOPO1/GMTED2010</span><button className="seed-copy" disabled={!engine} onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}>Seed świata: <b>{engine?.seed ?? "—"}</b> ⧉</button></footer>
+
+      {!warReport && capitalRelocationOptions.length > 0 && <div className="modal-backdrop war-report-backdrop" role="presentation"><section className="war-report capital-relocation" role="dialog" aria-modal="true" aria-labelledby="capital-relocation-title"><span className="eyebrow">UTRATA STOLICY</span><h2 id="capital-relocation-title">Rząd musi przenieść siedzibę</h2><p className="war-report-target">Wybierz bezpieczną stolicę zastępczą. Położenie, logistyka i odległość od frontu będą wpływać na zdolność państwa do działania.</p><div className="capital-relocation-options">{capitalRelocationOptions.map((option) => <button key={option.regionId} onClick={() => { if (!engine?.relocatePlayerCapital(option.regionId)) return; refresh(engine); autosave(engine); paint(); setPhase(`Stolica została przeniesiona do: ${option.name}.`); notify("Wybrano nową siedzibę rządu"); }}><b>{option.name}</b><small>{option.reason}</small><em>ocena {Math.round(option.score)}</em></button>)}</div></section></div>}
 
       {warReport && (() => { const attacker = engine?.getCountry(warReport.attackerId); const defender = engine?.getCountry(warReport.defenderId); const sector = strategicRegions[warReport.regionId]; const fled = warReport.refugeesFled ?? 0; return <div className="modal-backdrop war-report-backdrop" role="presentation"><section className="war-report" role="dialog" aria-modal="true" aria-labelledby="war-report-title"><button className="modal-close" onClick={() => setWarReport(null)} aria-label="Zamknij raport wojenny">×</button><span className="eyebrow">RAPORT ZAKOŃCZONEJ WOJNY · SZACUNEK MODELU</span><h2 id="war-report-title">{warOutcomeLabels[warReport.outcome]}</h2><p className="war-report-target">{attacker?.flag} {attacker?.name} <b>→</b> {defender?.flag} {defender?.name}</p><div className="war-report-area"><span>SPORNY OBSZAR</span><strong>{sector?.name ?? "nieznany sektor"}</strong><small>{strategicDate(warReport.startedTurn)} – {strategicDate(warReport.endedTurn)} · {warReport.battles} potyczek</small></div><div className="war-losses"><div><span>{attacker?.flag}</span><small>STRATY ATAKUJĄCEGO</small><strong>{warReport.attackerCasualties.toLocaleString("pl-PL")}</strong></div><div><span>{defender?.flag}</span><small>STRATY BRONIĄCEGO</small><strong>{warReport.defenderCasualties.toLocaleString("pl-PL")}</strong></div></div><div className="war-demographic-impact"><span>ZMIANY W LUDNOŚCI</span><div><small>{attacker?.flag} {attacker?.name}</small><b>−{warReport.attackerCasualties.toLocaleString("pl-PL")} osób w stratach bojowych</b></div><div><small>{defender?.flag} {defender?.name}</small><b>{fled ? `${fled.toLocaleString("pl-PL")} osób uciekło` : "brak odnotowanego odpływu uchodźców"}</b>{fled > 0 && <small>{Math.round((warReport.refugeesFledWomen ?? 0) / fled * 100)}% kobiet, {Math.round((warReport.refugeesFledChildren ?? 0) / fled * 100)}% dzieci, {Math.round((warReport.refugeesFledMen ?? 0) / fled * 100)}% dorosłych mężczyzn</small>}</div></div><p className="war-report-note">Straty bojowe uszczuplają ludność oraz zasób mobilizacyjny. Uchodźcy są liczeni tylko wtedy, gdy mogą przejść do sąsiedniego państwa. Ich skład zależy od mobilizacji broniącego się kraju.</p><button className="modal-primary" onClick={() => setWarReport(null)}>Przejdź dalej</button></section></div>; })()}
 

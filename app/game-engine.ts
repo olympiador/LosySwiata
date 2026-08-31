@@ -37,7 +37,9 @@ type RegionalGameRegion = Exclude<GameRegion, "world">;
 export type SizeKey = "all" | "large" | "big" | "medium" | "small" | "tiny";
 export type MapStyle = "colors" | "labels" | "flags" | "hybrid" | "relief";
 export type CountryLabelPlacement = { owner: number; name: string; x: number; y: number; fontSize: number; lines: string[] };
-export type CapitalPlacement = { countryId: number; countryName: string; name: string; x: number; y: number; controlled: boolean };
+export type CapitalPlacement = { countryId: number; countryName: string; name: string; x: number; y: number; controlled: boolean; regionId: number | null; relocated: boolean };
+export type StrategicCityPlacement = { id: number; countryId: number; regionId: number; name: string; x: number; y: number; controlled: boolean };
+export type StrategicCapitalRelocationOption = { regionId: number; name: string; score: number; reason: string };
 
 export type StrategicRegion = {
   id: number;
@@ -154,6 +156,8 @@ export type StrategicWarHistoryEntry = {
   refugeesFledChildren: number;
 };
 
+type StrategicCapitalLocation = { regionId: number; x: number; y: number; name: string; relocated: boolean };
+
 export type StrategicTerritoryEvent = {
   turn: number;
   sectorId: number;
@@ -268,6 +272,7 @@ export type GameSnapshot = {
   strategicExhaustion?: number[];
   strategicFortifications?: number[];
   strategicDefenseState?: StrategicDefenseState;
+  strategicCapitals?: Array<StrategicCapitalLocation | null>;
   colors?: Array<[number, number, number]>;
   mapRevision?: number;
   width: number;
@@ -757,6 +762,8 @@ export class WorldEngine {
   private strategicLogisticsInvestments: LogisticsInvestment[] = [];
   private strategicExhaustion: number[] = [];
   private strategicDefenseState: StrategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 };
+  private strategicCapitals: Array<StrategicCapitalLocation | null> = [];
+  private pendingCapitalRelocations = new Set<number>();
   private nextCampaignId = 1;
   private strategicBorderKey = "";
   private strategicBorders: Path2D | null = null;
@@ -1499,6 +1506,7 @@ export class WorldEngine {
       region.fortification = curatedFortificationBaseline(this.countries[region.originalOwnerId]?.iso ?? "", region.name, region.cx, region.cy).score;
     }
     this.strategicRegionRuns = runs;
+    this.initializeStrategicCapitals();
     this.strategicCampaigns = [];
     this.strategicTerritoryLog = [];
     this.strategicOccupations = [];
@@ -1507,6 +1515,7 @@ export class WorldEngine {
     this.strategicPendingCasualties = this.countries.map(() => 0);
     this.strategicExhaustion = this.countries.map(() => 0);
     this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 };
+    this.pendingCapitalRelocations.clear();
     this.nextCampaignId = 1;
     this.strategicBorderKey = "";
     this.strategicBorders = null;
@@ -2224,6 +2233,7 @@ export class WorldEngine {
       if (ownerId === campaign.defenderId) return true;
       return campaign.attackerId === this.playerCountryId && ownerId !== campaign.attackerId;
     });
+    this.updateStrategicCapitals();
     this.advanceCapabilityStates();
     this.distributeStrategicRefugees();
     this.settleStrategicCasualties();
@@ -2657,7 +2667,74 @@ export class WorldEngine {
     const y = Math.max(0, Math.min(MAP_H - 1, Math.floor(ny * MAP_H)));
     return this.getCountry(this.owners[y * MAP_W + x]);
   }
+
+  private initializeStrategicCapitals() {
+    this.strategicCapitals = this.countries.map((country) => {
+      if (!country.capital) return null;
+      const x = ((country.capital.longitude + 180) / 360 + 1) % 1;
+      const y = Math.max(0, Math.min(1, (90 - country.capital.latitude) / 180));
+      const source = Math.max(0, Math.min(this.strategicProvinceAt.length - 1, Math.floor(y * MAP_H) * MAP_W + wrapX(Math.floor(x * MAP_W))));
+      let regionId = this.strategicProvinceAt[source];
+      if (regionId < 0 || this.strategicRegions[regionId]?.ownerId !== country.id) {
+        regionId = this.strategicRegions.filter((region) => region.ownerId === country.id).sort((a, b) => gridDistanceKm(a.cx, a.cy, x * MAP_W, y * MAP_H) - gridDistanceKm(b.cx, b.cy, x * MAP_W, y * MAP_H))[0]?.id ?? -1;
+      }
+      return { regionId, x: x * 100, y: y * 100, name: country.capital.name, relocated: false };
+    });
+  }
+
+  private capitalScore(countryId: number, region: StrategicRegion) {
+    const hostileBorders = region.neighbours.filter((id) => this.strategicRegions[id]?.ownerId !== countryId).length;
+    const ownNeighbours = region.neighbours.length - hostileBorders;
+    return region.logisticsIndex * .75 + Math.min(28, Math.sqrt(region.areaKm2) / 6) + ownNeighbours * 4 - hostileBorders * 18;
+  }
+
+  private capitalOptions(countryId: number): StrategicCapitalRelocationOption[] {
+    return this.strategicRegions.filter((region) => region.ownerId === countryId && this.isStrategicRegionPlayable(region)).map((region) => {
+      const hostileBorders = region.neighbours.filter((id) => this.strategicRegions[id]?.ownerId !== countryId).length;
+      return { regionId: region.id, name: region.name, score: this.capitalScore(countryId, region), reason: hostileBorders ? "dobry dojazd, ale blisko zagrożonej granicy" : "bezpieczniejsze zaplecze z dostępem do logistyki" };
+    }).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  }
+
+  private relocateCapital(countryId: number, regionId: number) {
+    const region = this.strategicRegions[regionId];
+    if (!region || region.ownerId !== countryId) return false;
+    this.strategicCapitals[countryId] = { regionId, x: region.cx / MAP_W * 100, y: region.cy / MAP_H * 100, name: `Siedziba rządu, ${region.name}`, relocated: true };
+    this.pendingCapitalRelocations.delete(countryId);
+    return true;
+  }
+
+  private updateStrategicCapitals() {
+    for (const country of this.countries) {
+      const capital = this.strategicCapitals[country.id];
+      if (!capital || capital.regionId < 0 || this.strategicRegions[capital.regionId]?.ownerId === country.id) continue;
+      if (country.id === this.playerCountryId) this.pendingCapitalRelocations.add(country.id);
+      else {
+        const replacement = this.capitalOptions(country.id)[0];
+        if (replacement) this.relocateCapital(country.id, replacement.regionId);
+      }
+    }
+  }
+
+  getCapitalRelocationOptions(countryId: number): StrategicCapitalRelocationOption[] {
+    return this.pendingCapitalRelocations.has(countryId) ? this.capitalOptions(countryId).slice(0, 6) : [];
+  }
+
+  relocatePlayerCapital(regionId: number) {
+    if (this.playerCountryId === null || !this.pendingCapitalRelocations.has(this.playerCountryId)) return false;
+    return this.relocateCapital(this.playerCountryId, regionId);
+  }
+
+  getStrategicCityPlacements(): StrategicCityPlacement[] {
+    if (this.gameMode !== "strategy") return [];
+    return this.strategicRegions.map((region) => ({ id: region.id, countryId: region.ownerId, regionId: region.id, name: `Siedziba ${region.name}`, x: region.cx / MAP_W * 100, y: region.cy / MAP_H * 100, controlled: region.ownerId === region.originalOwnerId }));
+  }
+
   getCapitalPlacements(): CapitalPlacement[] {
+    if (this.gameMode === "strategy") return this.countries.flatMap((country) => {
+      const capital = this.strategicCapitals[country.id];
+      if (!capital) return [];
+      return [{ countryId: country.id, countryName: country.name, name: capital.name, x: capital.x, y: capital.y, controlled: this.strategicRegions[capital.regionId]?.ownerId === country.id, regionId: capital.regionId, relocated: capital.relocated }];
+    });
     const stats = this.stats();
     return this.countries.flatMap((country) => {
       if (!country.capital || !stats[country.id]?.cells) return [];
@@ -2672,6 +2749,8 @@ export class WorldEngine {
         x: x * 100,
         y: y * 100,
         controlled: this.owners[sourceY * MAP_W + sourceX] === country.id,
+        regionId: null,
+        relocated: false,
       }];
     });
   }
@@ -3807,6 +3886,7 @@ export class WorldEngine {
     this.playerPolicyState.decisions = createPlayerPolicyDecisionDefaults();
     if (mode === "strategy") this.buildStrategicRegions();
     else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
+    if (mode !== "strategy") { this.strategicCapitals = []; this.pendingCapitalRelocations.clear(); }
     this.visualRevision++;
   }
 
@@ -3838,6 +3918,7 @@ export class WorldEngine {
       strategicExhaustion: this.gameMode === "strategy" ? [...this.strategicExhaustion] : undefined,
       strategicFortifications: this.gameMode === "strategy" ? this.strategicRegions.map(({ fortification }) => fortification) : undefined,
       strategicDefenseState: this.gameMode === "strategy" ? { ...this.strategicDefenseState } : undefined,
+      strategicCapitals: this.gameMode === "strategy" ? this.strategicCapitals.map((capital) => capital ? { ...capital } : null) : undefined,
       colors: this.countries.map(({ color }) => [color[0], color[1], color[2]]),
       mapRevision: CURRENT_MAP_REVISION,
       width: MAP_W,
@@ -3945,8 +4026,11 @@ export class WorldEngine {
       this.strategicDefenseState = snapshot.strategicDefenseState
         ? { ...snapshot.strategicDefenseState }
         : { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 };
+      if (snapshot.strategicCapitals?.length === this.countries.length) this.strategicCapitals = snapshot.strategicCapitals.map((capital) => capital ? { ...capital } : null);
+      this.pendingCapitalRelocations.clear();
+      this.updateStrategicCapitals();
       this.nextCampaignId = Math.max(0, ...this.strategicCampaigns.map(({ id }) => id)) + 1;
-    } else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
+    } else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; this.strategicCapitals = []; this.pendingCapitalRelocations.clear(); }
     if ((snapshot.mapRevision ?? 0) >= CURRENT_MAP_REVISION && snapshot.colors?.length === this.countries.length && snapshot.colors.every((color) => color.length === 3 && color.every(Number.isFinite))) {
       snapshot.colors.forEach((color, id) => { this.countries[id].color = [color[0], color[1], color[2]]; });
     } else {
