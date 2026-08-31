@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { inflateSync } from "node:zlib";
 import { assignCrimeaToUkraine, assignFrenchGuianaOwner, circularColumnSpan, classifyGameRegion, curatedFortificationBaseline, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
-import { applyRefugeeMovement, evaluateCapabilityChange, initialCapabilityStates, loadCapabilityStatesFromSnapshot } from "../app/country-capability";
+import { applyRefugeeMovement, evaluateCapabilityChange, initialCapabilityStates, loadCapabilityStatesFromSnapshot, refugeeArrivalProfile } from "../app/country-capability";
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_ISO, ADMIN1_NAMES } from "../app/admin1-data";
 import { REAL_AIRPORTS_DEFLATE_BASE64 } from "../app/airport-data";
 import { CAPITALS } from "../app/capital-data";
@@ -83,10 +83,13 @@ test("initial demographic pyramids differ by country development", () => {
 
 test("refugee transfers change the sending and receiving populations without inventing residents", () => {
   const state = initialCapabilityStates([{ ...countries[0], iso: "PL", iso3: "POL" }])[0];
-  const moved = applyRefugeeMovement(state, 12_000, 3_500);
+  const moved = applyRefugeeMovement(state, 12_000, 3_500, refugeeArrivalProfile("full"));
   assert.equal(moved.populationAbsolute, state.populationAbsolute + 8_500);
   assert.equal(moved.refugeesHosted, state.refugeesHosted + 12_000);
-  assert.ok(moved.demographics.children > state.demographics.children, "arrival profile should include more children");
+  assert.equal(moved.refugeeComposition.women, 6_840);
+  assert.equal(moved.refugeeComposition.men, 720);
+  assert.equal(moved.refugeeComposition.children, 4_440);
+  assert.ok(moved.demographics.children > state.demographics.children, "full mobilization should send a child-heavy civilian profile");
 });
 
 test("French Guiana can be assigned as the game's independent country", () => {

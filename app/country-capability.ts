@@ -8,6 +8,7 @@ export type DemographicPyramid = { children: number; youth: number; primeAge: nu
 export type DemographicType = "healthy" | "chimney" | "inverted";
 export type BorderPolicy = "closed" | "selective" | "open" | "mass";
 export type CulturalProximity = Record<number, number>;
+export type RefugeeComposition = { women: number; men: number; children: number };
 
 export type RegionLogistics = {
   regionId: number;
@@ -43,6 +44,7 @@ export type CountryCapabilityState = {
   culturalProximity: CulturalProximity;
   assimilationProgress: number;
   refugeesHosted: number;
+  refugeeComposition: RefugeeComposition;
   populationAbsolute: number;
   logisticsInvestments: LogisticsInvestment[];
 };
@@ -181,6 +183,7 @@ function defaultInitialCountryCapabilityState(): CountryCapabilityState {
     culturalProximity: defaultProximity(),
     assimilationProgress: 0,
     refugeesHosted: 0,
+    refugeeComposition: { women: 0, men: 0, children: 0 },
     populationAbsolute: 0,
   };
 }
@@ -239,6 +242,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       culturalProximity,
       assimilationProgress: 0,
       refugeesHosted: 0,
+      refugeeComposition: { women: 0, men: 0, children: 0 },
     };
   });
 }
@@ -279,8 +283,15 @@ export function demographicCliff(demographics: DemographicPyramid): { economyPen
   return { economyPenalty: 0, populationPenalty: 0, stabilityPenalty: 0, manpowerPenalty: 0 };
 }
 
+/** Skład uciekinierów zależy od tego, ilu dorosłych mężczyzn zatrzymuje mobilizacja. */
+export function refugeeArrivalProfile(mobilization: CountryCapabilityState["manpower"]["mobilization"]): RefugeeComposition {
+  if (mobilization === "full") return { women: .57, men: .06, children: .37 };
+  if (mobilization === "open") return { women: .51, men: .12, children: .37 };
+  return { women: .42, men: .25, children: .33 };
+}
+
 /** Zapisuje faktyczne przekazanie ludzi między dwoma państwami. */
-export function applyRefugeeMovement(state: CountryCapabilityState, incoming: number, outgoing: number): CountryCapabilityState {
+export function applyRefugeeMovement(state: CountryCapabilityState, incoming: number, outgoing: number, arrivalProfile = refugeeArrivalProfile("hidden")): CountryCapabilityState {
   const population = Math.max(1, state.populationAbsolute || state.components.population * 1_000_000);
   const arrivals = Math.max(0, Math.round(incoming));
   const departures = Math.min(Math.max(0, Math.round(outgoing)), Math.round(population * 0.03));
@@ -289,12 +300,16 @@ export function applyRefugeeMovement(state: CountryCapabilityState, incoming: nu
   // Uchodźcy częściej są dziećmi oraz ludźmi w wieku produkcyjnym. Wyjazdy
   // odbierają całemu społeczeństwu proporcjonalną część każdej grupy.
   const groups: Array<keyof DemographicPyramid> = ["children", "youth", "primeAge", "middleAge", "elderly", "veryOld"];
-  const arrivalShare: DemographicPyramid = { children: .23, youth: .15, primeAge: .42, middleAge: .13, elderly: .05, veryOld: .02 };
+  const adultShare = 1 - arrivalProfile.children;
+  const arrivalShare: DemographicPyramid = { children: arrivalProfile.children, youth: adultShare * .15, primeAge: adultShare * .54, middleAge: adultShare * .20, elderly: adultShare * .08, veryOld: adultShare * .03 };
   const masses = Object.fromEntries(groups.map((group) => [group, Math.max(0, population * state.demographics[group] - departures * state.demographics[group] + arrivals * arrivalShare[group])])) as Record<keyof DemographicPyramid, number>;
   const nextPopulation = Math.max(1, population - departures + arrivals);
   const demographics = Object.fromEntries(groups.map((group) => [group, masses[group] / nextPopulation])) as DemographicPyramid;
   const netPopulation = arrivals - departures;
   const manpowerDelta = Math.round(netPopulation / 1_000_000 * .22);
+  const women = Math.round(arrivals * arrivalProfile.women);
+  const men = Math.round(arrivals * arrivalProfile.men);
+  const children = arrivals - women - men;
   return {
     ...state,
     components: { ...state.components, population: clamp(state.components.population + netPopulation / 1_000_000) },
@@ -303,6 +318,7 @@ export function applyRefugeeMovement(state: CountryCapabilityState, incoming: nu
     manpower: { ...state.manpower, available: Math.max(0, state.manpower.available + manpowerDelta), reserves: Math.max(0, state.manpower.reserves + manpowerDelta) },
     populationAbsolute: nextPopulation,
     refugeesHosted: state.refugeesHosted + arrivals,
+    refugeeComposition: { women: state.refugeeComposition.women + women, men: state.refugeeComposition.men + men, children: state.refugeeComposition.children + children },
   };
 }
 
@@ -451,6 +467,7 @@ export function evaluateCapabilityChange(
     culturalProximity: state.culturalProximity,
     assimilationProgress: postAssimilationState.assimilationProgress,
     refugeesHosted: state.refugeesHosted,
+    refugeeComposition: state.refugeeComposition,
     populationAbsolute: state.populationAbsolute,
   };
   return updated;
@@ -484,6 +501,7 @@ export function capabilityStateToSnapshotArray(state: CountryCapabilityState): n
     state.manpower.available, state.manpower.active, state.manpower.reserves,
     state.populationAbsolute, state.assimilationProgress, state.refugeesHosted,
     regimeIndex,
+    state.refugeeComposition.women, state.refugeeComposition.men, state.refugeeComposition.children,
   ];
 }
 
@@ -514,6 +532,7 @@ export function loadCapabilityStatesFromSnapshot(countries: Country[], entries: 
       culturalProximity: defaultProximity(),
       assimilationProgress: clamp(entry[12] ?? 0, 0, 100),
       refugeesHosted: clamp(entry[13] ?? 0, 0, 500_000_000),
+      refugeeComposition: { women: clamp(entry[15] ?? 0, 0, 500_000_000), men: clamp(entry[16] ?? 0, 0, 500_000_000), children: clamp(entry[17] ?? 0, 0, 500_000_000) },
       populationAbsolute: clamp(entry[11] ?? 0, 0, 2_000_000_000),
     };
   });

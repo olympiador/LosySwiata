@@ -10,7 +10,7 @@ import { REAL_AIRPORTS_DEFLATE_BASE64 } from "./airport-data";
 import { REAL_PORTS_DEFLATE_BASE64 } from "./port-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
-import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, applyRefugeeMovement, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
+import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, applyRefugeeMovement, refugeeArrivalProfile, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
 export type { PolicyDecisionId, PlayerPolicyDecision, PlayerPolicyState, BorderPolicy, RegionLogistics };
 
 export const MAP_W = 4320;
@@ -1643,6 +1643,10 @@ export class WorldEngine {
     return state?.refugeesHosted ?? 0;
   }
 
+  getCountryRefugeeComposition(countryId: number) {
+    return this.countryCapabilityStates[countryId]?.refugeeComposition ?? { women: 0, men: 0, children: 0 };
+  }
+
   getCountryBorderPolicy(countryId: number) {
     const state = this.countryCapabilityStates[countryId];
     return state?.borderPolicy ?? "selective";
@@ -2437,6 +2441,9 @@ export class WorldEngine {
     if (this.gameMode !== "strategy" || !this.strategicCampaigns.length) return;
     const incoming = this.countries.map(() => 0);
     const outgoing = this.countries.map(() => 0);
+    const incomingWomen = this.countries.map(() => 0);
+    const incomingMen = this.countries.map(() => 0);
+    const incomingChildren = this.countries.map(() => 0);
     const frontsByDefender = new Map<number, typeof this.strategicCampaigns>();
     for (const campaign of this.strategicCampaigns) {
       if (this.strategicRegions[campaign.regionId]?.ownerId !== campaign.defenderId) continue;
@@ -2468,12 +2475,21 @@ export class WorldEngine {
       // Błędy zaokrągleń kierujemy do najlepiej przygotowanego sąsiada.
       const best = [...weighted].sort((a, b) => b.score - a.score)[0];
       if (best) shares.find(({ id }) => id === best.id)!.amount += requested - moved;
-      for (const { id, amount } of shares) incoming[id] += amount;
+      const profile = refugeeArrivalProfile(source.manpower.mobilization);
+      for (const { id, amount } of shares) {
+        incoming[id] += amount;
+        incomingWomen[id] += amount * profile.women;
+        incomingMen[id] += amount * profile.men;
+        incomingChildren[id] += amount * profile.children;
+      }
       outgoing[sourceId] += requested;
     }
     for (let id = 0; id < this.countries.length; id++) {
       if (!incoming[id] && !outgoing[id]) continue;
-      this.countryCapabilityStates[id] = applyRefugeeMovement(this.countryCapabilityStates[id], incoming[id], outgoing[id]);
+      const profile = incoming[id] > 0
+        ? { women: incomingWomen[id] / incoming[id], men: incomingMen[id] / incoming[id], children: incomingChildren[id] / incoming[id] }
+        : undefined;
+      this.countryCapabilityStates[id] = applyRefugeeMovement(this.countryCapabilityStates[id], incoming[id], outgoing[id], profile);
     }
   }
 
