@@ -1416,7 +1416,7 @@ export default function Home() {
               })}
             </div>}
             {gameMode === "strategy" && zoom >= 1.35 && <div className="city-layer" aria-hidden="true">
-              {visibleCities.map((city) => <span key={`${city.id}:${city.wrap}`} className={`city-marker ${city.controlled ? "" : "occupied"}`} style={{ left: city.left, top: city.top }} title={city.name}><i>◆</i>{zoom >= 7 && <b>{city.name.replace("Siedziba ", "")}</b>}</span>)}
+              {visibleCities.map((city) => <span key={`${city.id}:${city.wrap}`} className={`city-marker ${city.controlled ? "" : "occupied"}`} style={{ left: city.left, top: city.top }} title={city.name}><i>◆</i></span>)}
             </div>}
             {battleArtifacts.length > 0 && <div className="war-scar-layer" aria-hidden="true" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}>
               {battleArtifacts.slice(-80).map((artifact) => [-100, 0, 100].map((wrap) => <span key={`${artifact.id}:${wrap}`} className={`war-scar ${artifact.kind}`} style={{ left: `${artifact.x + wrap}%`, top: `${artifact.y}%`, opacity: Math.max(.2, 1 - Math.max(0, turn - artifact.turn) / 34), transform: `translate(-50%,-50%) scale(${1 / zoom})` }} title="Ślady ostatnich walk">{artifact.kind === "burned" ? "♨" : "⚔"}</span>))}
