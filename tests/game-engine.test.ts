@@ -532,6 +532,13 @@ test("a much weaker strategic attacker can be repelled instead of gaining guaran
   assert.equal(engine.getStrategicCampaigns().some(({ attackerId }) => attackerId === 0), false, "a collapsed offensive must be removed");
   assert.ok(result.records.some(({ countryId, text }) => countryId === 0 && text.includes("załamuje się")), "the player receives an explicit defeat record");
   assert.equal(engine.getStrategicRegions()[target.id].ownerId, 1, "the defender keeps the province");
+  const war = engine.getStrategicWarHistory(0).at(-1);
+  assert.equal(war?.outcome, "repelled");
+  assert.ok((war?.attackerCasualties ?? 0) > 0 && (war?.defenderCasualties ?? 0) > 0, "a finished war records losses on both sides");
+  assert.ok(engine.getStrategicBattleArtifacts().some(({ regionId }) => regionId === target.id), "a battle leaves a persistent map artifact");
+  const restored = engineFrom(owners);
+  restored.load(engine.snapshot());
+  assert.deepEqual(restored.getStrategicWarHistory(0), engine.getStrategicWarHistory(0), "war history survives saving and loading");
 });
 
 test("a stalled strategic front ends instead of standing forever", () => {

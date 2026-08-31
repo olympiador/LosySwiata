@@ -63,9 +63,11 @@ import {
   type PolicyDecisionId,
   type PlayerPolicyDecision,
   type StrategicCampaign,
+  type StrategicBattleArtifact,
   type StrategicDefensePosture,
   type StrategicOccupation,
   type StrategicRegion,
+  type StrategicWarHistoryEntry,
   type SizeKey,
   type TurnPlan,
   type TurnRecord,
@@ -129,6 +131,7 @@ type SidePanel = "history" | "ranking" | "chronicle";
 type RankingSortKey = "rank" | "country" | "area" | "strength" | "change" | "defeats";
 type CapitalDisplay = "labels" | "markers" | "off";
 type BattleFx = { x: number; y: number; direction: Direction; phase: "aim" | "clash" | "front"; key: number };
+const warOutcomeLabels: Record<StrategicWarHistoryEntry["outcome"], string> = { captured: "Zdobyty sektor", repelled: "Atak odparty", withdrawn: "Ofensywa wycofana", stalemate: "Front wygasł" };
 type Gesture = {
   points: Map<number, Point>;
   last: Point | null;
@@ -261,6 +264,8 @@ export default function Home() {
   const [strategicRegions, setStrategicRegions] = useState<StrategicRegion[]>([]);
   const [strategicCampaigns, setStrategicCampaigns] = useState<StrategicCampaign[]>([]);
   const [strategicOccupations, setStrategicOccupations] = useState<StrategicOccupation[]>([]);
+  const [battleArtifacts, setBattleArtifacts] = useState<StrategicBattleArtifact[]>([]);
+  const [warReport, setWarReport] = useState<StrategicWarHistoryEntry | null>(null);
   const [stage, setStage] = useState<TurnStage>("country");
   const [draft, setDraft] = useState<TurnDraft>({});
   const [turn, setTurn] = useState(0);
@@ -376,6 +381,7 @@ export default function Home() {
     setStrategicRegions(instance.getStrategicRegions());
     setStrategicCampaigns(instance.getStrategicCampaigns());
     setStrategicOccupations(instance.getStrategicOccupations());
+    setBattleArtifacts(instance.getStrategicBattleArtifacts());
     setDataVersion((value) => value + 1);
   }, []);
 
@@ -749,6 +755,8 @@ export default function Home() {
       const result = engine.advanceStrategicRound(targetRegionId);
       highlightRef.current = result.changedIndices;
       refresh(engine); autosave(engine); paint();
+      const finishedWar = result.completedWars.find((war) => war.attackerId === engine.playerCountryId || war.defenderId === engine.playerCountryId) ?? result.completedWars[0];
+      if (finishedWar) setWarReport(finishedWar);
       setStrategicTargetId(null);
       const playerCampaign = engine.getStrategicCampaigns().find(({ attackerId }) => attackerId === engine.playerCountryId);
       const conflict = engine.getPlayerCampaignConflict();
@@ -918,7 +926,7 @@ export default function Home() {
     setGameMode(mode); setGameRegion(region); setPlayerCountryId(playerId);
     setRankingSort(mode === "strategy" ? { key: "strength", direction: "desc" } : { key: "rank", direction: "asc" });
     setExpandedRankingCountryId(null);
-    setPendingMode(null); setPendingRegion(null); setStrategicTargetId(null);
+    setPendingMode(null); setPendingRegion(null); setStrategicTargetId(null); setWarReport(null);
     setSeedInput(String(seed)); setSpeed(4);
     autosave(engine); refresh(engine);
     setPhase(mode === "strategy" && playerId !== null
@@ -944,7 +952,7 @@ export default function Home() {
 
   const newGame = () => {
     if (!engine || busy || !confirm("Rozpocząć nową rozgrywkę? Obecny świat zostanie zastąpiony.")) return;
-    setDraft({}); setStage("country"); setBattleFx(null); engine.reset(); selectedRef.current = null; setSelectedId(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = [];
+    setDraft({}); setStage("country"); setBattleFx(null); setWarReport(null); engine.reset(); selectedRef.current = null; setSelectedId(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = [];
     refresh(engine); try { localStorage.removeItem(STORAGE_KEY); } catch { /* storage can be unavailable */ } setWheels({ country: "—", action: "—", direction: "—", size: "—" });
     engine.setMicrostateRule("all");
     setGameMode(null); setGameRegion(null); setPendingMode(null); setPendingRegion(null); setPlayerCountryId(null); setStrategicTargetId(null); setMicrostateRule("all"); setSeedInput(""); setSidePanel("history"); setSpeed(4); setPhase("Wybierz tryb nowej rozgrywki"); setMenu(false); resetView(); paint();
@@ -1391,6 +1399,9 @@ export default function Home() {
                 return <span key={`${capital.countryId}:${capital.wrap}`} className={`capital-marker ${capital.controlled ? "" : "occupied"} ${zoom < 2 ? "overview" : ""} ${showName ? "named" : ""}`} style={{ left: capital.left, top: capital.top }}><i>★</i>{showName && <b>{capital.name}</b>}</span>;
               })}
             </div>}
+            {battleArtifacts.length > 0 && <div className="war-scar-layer" aria-hidden="true" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}>
+              {battleArtifacts.slice(-160).map((artifact) => [-100, 0, 100].map((wrap) => <span key={`${artifact.id}:${wrap}`} className={`war-scar ${artifact.kind}`} style={{ left: `${artifact.x + wrap}%`, top: `${artifact.y}%`, opacity: Math.max(.24, 1 - Math.max(0, turn - artifact.turn) / 34) }} title="Ślady ostatnich walk">{artifact.kind === "burned" ? "♨" : "⚔"}</span>))}
+            </div>}
             {battleFx && animationMode !== "off" && <div className={`battle-layer ${animationMode}`} aria-hidden="true" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}>
               {[-100, 0, 100].map((wrap) => <div key={`${battleFx.key}:${wrap}`} className={`battle-marker ${battleFx.phase}`} style={{ left: `${battleFx.x + wrap}%`, top: `${battleFx.y}%` }}>
                 <i className="battle-arrow" style={{ transform: `translate(-100%,-50%) rotate(${battleAngle}deg)` }} />
@@ -1421,6 +1432,7 @@ export default function Home() {
                 <footer><span>Typ piramidy: <b>{engine?.getDemographicLabel(selectedDossier.demographicType)}</b></span><span>Granice: <b>{selectedDossier.borderPolicy === "closed" ? "Zamknięte" : selectedDossier.borderPolicy === "selective" ? "Selektywne" : selectedDossier.borderPolicy === "open" ? "Otwarte" : "Masowe"}</b></span>{selectedDossier.refugeesHosted > 0 && <span>Uchodźcy: <b>{Math.round(selectedDossier.refugeesHosted).toLocaleString("pl-PL")}</b></span>}</footer>
               </section>}
               {dossierTab === "military" && <section className="dossier-stats"><div><span>Sektory</span><b>{selectedDossier.regions.length}</b></div><div><span>Aktywne ofensywy</span><b>{selectedDossier.outgoing.length}</b></div><div><span>Bronione kierunki</span><b>{selectedDossier.incoming.length}</b></div></section>}
+              {dossierTab === "military" && (() => { const wars = engine?.getStrategicWarHistory(selectedDossier.countryId).slice(-8).reverse() ?? []; return <section className="country-war-history"><header><b>HISTORIA WOJEN</b><span>{wars.length ? `${wars.length} ostatnich` : "brak zakończonych"}</span></header>{wars.length ? wars.map((war) => { const enemyId = war.attackerId === selectedDossier.countryId ? war.defenderId : war.attackerId; const sector = strategicRegions[war.regionId]; return <div key={war.id}><span><b>{engine?.getCountry(enemyId)?.flag} {engine?.getCountry(enemyId)?.name}</b><small>{strategicDate(war.startedTurn)} – {strategicDate(war.endedTurn)} · {sector?.name ?? "nieznany sektor"}</small></span><em className={war.outcome}>{warOutcomeLabels[war.outcome]}</em><small>straty: {war.attackerId === selectedDossier.countryId ? war.attackerCasualties.toLocaleString("pl-PL") : war.defenderCasualties.toLocaleString("pl-PL")} · {war.battles} potyczek</small></div>; }) : <small>To państwo nie zakończyło jeszcze żadnej kampanii.</small>}</section>; })()}
               {dossierTab === "military" && selectedDossier.assessment && <section className={`war-assessment ${selectedDossier.assessment.level}`}><small>TWOJA OFENSYWA PRZECIW TEMU KRAJOWI</small><strong>{selectedDossier.assessment.label}</strong><div><i style={{ width: `${selectedDossier.assessment.chance}%` }} /></div><p>Szansa powodzenia: <b>{selectedDossier.assessment.chance}%</b>. Obrona własnego regionu daje przeciwnikowi +15%; {selectedDossier.assessment.front.attackerFronts > 1 ? `Twoje ${selectedDossier.assessment.front.attackerFronts} fronty rozpraszają siły.` : "nie masz kary za wiele frontów."} Każdy kwartał zawiera jawny czynnik losowy.</p></section>}
               {dossierTab === "military" && selectedDossier.attackableRegions.length > 0 && <section className="dossier-targets"><header><b>DOSTĘPNE CELE</b><span>{selectedDossier.attackableRegions.length}</span></header>{selectedDossier.attackableRegions.map((region) => <button key={region.id} onClick={() => selectStrategicTarget(region.id)}><span>{region.name}</span><b>{formatArea(region.areaKm2)}</b><i>WYBIERZ I POKAŻ →</i></button>)}</section>}
               {dossierTab === "military" && <section className="dossier-regions"><header><b>SEKTORY TERENOWE I OBRONA</b><span>{selectedDossier.regions.length}</span></header><small>To te same jednostki terenu, które zakładka Logistyka nazywa regionami. Kliknięcie zawsze pokazuje ten sam obszar na mapie.</small><div>{selectedDossier.regions.map((region) => <button key={region.id} className={inspectedSectorId === region.id ? "active" : ""} onClick={() => { setInspectedSectorId(region.id); focusStrategicRegion(region.id); }}><span>{region.name}</span><b>{formatArea(region.areaKm2)}</b></button>)}</div></section>}
@@ -1544,6 +1556,8 @@ export default function Home() {
       </section>
 
       <footer className="app-footer"><span>Mapa zapisuje się automatycznie na tym urządzeniu</span><span className="terrain-credit">Prowincje: Natural Earth Admin‑1 · Wysokości: ETOPO1/GMTED2010</span><button className="seed-copy" disabled={!engine} onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}>Seed świata: <b>{engine?.seed ?? "—"}</b> ⧉</button></footer>
+
+      {warReport && (() => { const attacker = engine?.getCountry(warReport.attackerId); const defender = engine?.getCountry(warReport.defenderId); const sector = strategicRegions[warReport.regionId]; return <div className="modal-backdrop war-report-backdrop" role="presentation"><section className="war-report" role="dialog" aria-modal="true" aria-labelledby="war-report-title"><button className="modal-close" onClick={() => setWarReport(null)} aria-label="Zamknij raport wojenny">×</button><span className="eyebrow">RAPORT ZAKOŃCZONEJ WOJNY · SZACUNEK MODELU</span><h2 id="war-report-title">{warOutcomeLabels[warReport.outcome]}</h2><p className="war-report-target">{attacker?.flag} {attacker?.name} <b>→</b> {defender?.flag} {defender?.name}</p><div className="war-report-area"><span>SPORNY OBSZAR</span><strong>{sector?.name ?? "nieznany sektor"}</strong><small>{strategicDate(warReport.startedTurn)} – {strategicDate(warReport.endedTurn)} · {warReport.battles} potyczek</small></div><div className="war-losses"><div><span>{attacker?.flag}</span><small>STRATY ATAKUJĄCEGO</small><strong>{warReport.attackerCasualties.toLocaleString("pl-PL")}</strong></div><div><span>{defender?.flag}</span><small>STRATY BRONIĄCEGO</small><strong>{warReport.defenderCasualties.toLocaleString("pl-PL")}</strong></div></div><p className="war-report-note">Liczby są symulowanym bilansem kampanii, zależnym od wielkości sektora, siły obu frontów i przebiegu potyczek. Historia tej wojny została zapisana na kartach obu państw.</p><button className="modal-primary" onClick={() => setWarReport(null)}>Przejdź dalej</button></section></div>; })()}
 
       {rules && <div className="modal-backdrop" onMouseDown={() => setRules(false)}><section className="rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-title" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setRules(false)}>×</button><span className="eyebrow">REGUŁY SYMULACJI</span><h2 id="rules-title">Jak zmienia się świat?</h2>
         <ol className="rules-steps"><li><b>1</b><span><strong>Kraj</strong>Klikasz i losujesz jeden z istniejących krajów.</span></li><li><b>2</b><span><strong>Akcja</strong>W trybie pełnym losujesz wojnę, nowy ląd albo erozję. W War only zawsze wypada wojna.</span></li><li><b>3</b><span><strong>Kierunek</strong>Losujesz jeden z ośmiu kierunków. Gdy cel jest niemożliwy, klikasz ten etap ponownie.</span></li><li><b>4</b><span><strong>Wielkość</strong>Losujesz obszar liczony względem aktualnej wielkości kraju.</span></li><li><b>5</b><span><strong>Wykonanie</strong>Dopiero ostatnie kliknięcie zmienia granice na mapie.</span></li></ol>
