@@ -2716,7 +2716,21 @@ export class WorldEngine {
       const y = Math.max(0, Math.min(1, (90 - country.capital.latitude) / 180));
       const sourceX = wrapX(Math.floor(x * MAP_W));
       const sourceY = Math.max(0, Math.min(MAP_H - 1, Math.floor(y * MAP_H)));
-      return { index: sourceY * MAP_W + sourceX, lostTurn: null, relocated: false };
+      const source = sourceY * MAP_W + sourceX;
+      if (this.initialOwners[source] === country.id) return { index: source, lostTurn: null, relocated: false };
+      // Rasteryzacja potrafi przypisać komórkę stolicy sąsiadowi (Kinszasa nad
+      // rzeką, Bratysława przy granicy). Bez tej korekty kraj "traciłby"
+      // stolicę już w pierwszej turze. Szukamy najbliższej własnej komórki.
+      for (let radius = 1; radius <= 6; radius++) {
+        for (let oy = -radius; oy <= radius; oy++) for (let ox = -radius; ox <= radius; ox++) {
+          if (Math.max(Math.abs(ox), Math.abs(oy)) !== radius) continue;
+          const ny = sourceY + oy;
+          if (ny < 0 || ny >= MAP_H) continue;
+          const index = ny * MAP_W + wrapX(sourceX + ox);
+          if (this.initialOwners[index] === country.id) return { index, lostTurn: null, relocated: false };
+        }
+      }
+      return { index: null, lostTurn: null, relocated: false };
     });
   }
 
@@ -4004,7 +4018,7 @@ export class WorldEngine {
       if (plan.action === "war") this.warExhaustion = this.warExhaustion.map((value, id) => id === actor.id ? value + WAR_EXHAUSTION_GAIN : Math.max(0, value - WAR_EXHAUSTION_DECAY));
       for (const country of this.countries) {
         const capital = this.capitalStates[country.id];
-        if (!capital || capital.index === null || capital.lostTurn !== null || this.owners[capital.index] === country.id) continue;
+        if (!capital || capital.index === null || capital.lostTurn !== null || this.owners[capital.index] === country.id || !this.isCountryPlayable(country.id)) continue;
         capital.lostTurn = this.turn;
         capitalLost ??= country.name;
       }

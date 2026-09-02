@@ -770,6 +770,9 @@ export default function Home() {
       const result = engine.vetoDirection(draft.countryId, draft.action);
       if (!result) return;
       const left = engine.getWarVetoesLeft();
+      // Weto zużywa zasób partii poza apply(), więc licznik trzeba odświeżyć ręcznie.
+      setDataVersion((value) => value + 1);
+      autosave(engine);
       setPhase("Weto: losuję nowy kierunek…");
       await spin("direction", DIRECTIONS.map((item) => `${arrows[item.short]} ${item.short}`), `${arrows[result.direction.short]} ${result.direction.short}`, 320);
       if (!result.valid) {
@@ -799,7 +802,7 @@ export default function Home() {
       setPlayerAlarm(null);
       setPhase(`Weto: nowy kierunek ${result.direction.short} (zostało ${left})`);
     } finally { busyRef.current = false; setBusy(false); }
-  }, [animationMode, draft, engine, focusCountry, gameMode, notify, playerCountryId, spin, stage]);
+  }, [animationMode, autosave, draft, engine, focusCountry, gameMode, notify, playerCountryId, spin, stage]);
 
   const stopAuto = useCallback(() => {
     autoRunRef.current = false;

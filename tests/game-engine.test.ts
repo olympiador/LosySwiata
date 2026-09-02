@@ -2103,3 +2103,26 @@ test("war mode lets capital-less countries act when nobody else can", () => {
   engine.load(snapshot);
   assert.notEqual(engine.rollCountry(), null, "with every capital lost the game must still find an attacker");
 });
+
+test("war mode snaps a capital rasterized onto a neighbour back to its own country and never flags it at start", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 100; y <= 110; y++) for (let x = 100; x <= 110; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 100; y <= 110; y++) for (let x = 111; x <= 121; x++) owners[indexAt(x, y)] = 1;
+  const sourceCountries = [
+    { ...countries[0], capital: capitalAt("Stolica A", 105, 105) },
+    // The capital coordinates land one cell across the border, inside country 0.
+    { ...countries[1], capital: capitalAt("Stolica B", 110, 105) },
+    { ...countries[1], id: 2, iso: "CC", name: "Bez lądu", capital: capitalAt("Stolica C", 400, 400) },
+  ];
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  engine.setGameMode("war");
+  const states = engine.snapshot().capitalStates!;
+  assert.ok(states[1] && states[1].index !== null, "a border capital must snap to an own cell");
+  assert.equal(owners[states[1]!.index!], 1);
+  assert.equal(states[2]?.index, null, "a capital with no own land nearby is left unset instead of being lost");
+  const plan = engine.planTurn();
+  assert.ok(plan);
+  const { record } = engine.apply(plan!);
+  assert.equal(record.capitalLost, undefined, "no capital falls in the opening turn without a real capture");
+});
