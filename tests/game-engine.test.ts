@@ -1806,3 +1806,17 @@ test("ranking tracks defeats and preserves them through save, load and undo", ()
   assert.equal(engine.undo(), true);
   assert.equal(engine.getRanking().find((entry) => entry.countryId === 0)?.defeats, 0);
 });
+
+test("war mode tracks war exhaustion per country", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 100; y <= 110; y++) for (let x = 100; x <= 110; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 100; y <= 110; y++) for (let x = 111; x <= 121; x++) owners[indexAt(x, y)] = 1;
+  const engine = engineFrom(owners);
+  engine.countries.forEach((country) => { country.region = "europe"; });
+  engine.setGameMode("war");
+  engine.setGameRegion("europe");
+  const warEngine = engine as unknown as { getWarExhaustion(id: number): number };
+  assert.equal(typeof warEngine.getWarExhaustion, "function", "war mode must expose per-country war exhaustion");
+  assert.equal(warEngine.getWarExhaustion(0), 0);
+});
