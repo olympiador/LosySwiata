@@ -242,7 +242,7 @@ function History({ record }: { record: TurnRecord }) {
     <article className="history-item">
       <span className={`history-icon ${record.action}`}>{actionIcons[record.action]}</span>
       <div>
-        <header><b>Tura {record.turn}</b><em>{strategic ? "KAMPANIA" : `${SIZE_LABELS[record.size]}${record.partial ? " · CZĘŚCIOWO" : ""}`}</em></header>
+        <header><b>Tura {record.turn}</b><em>{strategic ? "KAMPANIA" : `${SIZE_LABELS[record.size]}${record.partial ? " · CZĘŚCIOWO" : ""}`}</em>{record.capitalLost && <em className="history-flag">STOLICA UPADŁA</em>}{record.capitalRelocated && <em className="history-flag relocated">NOWA SIEDZIBA</em>}</header>
         <p>{record.text}</p>
         <small>{record.countryFlag} {record.countryName} · {record.directionShort} · {strategic ? record.changedKm2 > 0 ? formatArea(record.changedKm2) : "ruch strategiczny" : record.partial ? `wykonano ${Math.round((record.actualFraction ?? 0) * 100)}% zamiast ${Math.round(record.fraction * 100)}%` : `${Math.round(record.fraction * 100)}%`}</small>
       </div>
@@ -297,6 +297,7 @@ export default function Home() {
   const [dossierTab, setDossierTab] = useState<DossierTab>("overview");
   const [dossierMode, setDossierMode] = useState<"country" | "sector">("country");
   const [battleFx, setBattleFx] = useState<BattleFx | null>(null);
+  const [playerAlarm, setPlayerAlarm] = useState<string | null>(null);
   const [seedInput, setSeedInput] = useState("");
   const [microstateRule, setMicrostateRule] = useState<MicrostateRule>("all");
   const [sidePanel, setSidePanel] = useState<SidePanel>("history");
@@ -695,6 +696,17 @@ export default function Home() {
         } else setBattleFx(null);
         setWheels((current) => ({ ...current, size: "—" }));
         setStage("size");
+        const attacker = engine.getCountry(draft.countryId);
+        if (gameMode === "war" && draft.action === "war" && playerCountryId !== null && result.targetId === playerCountryId) {
+          const defenderName = engine.getCountry(playerCountryId)?.name ?? "Twoje państwo";
+          const alarmText = `ALARM: ${defenderName} jest celem ataku ${attacker?.name ?? "przeciwnika"} z kierunku ${result.direction.short}`;
+          setPlayerAlarm(alarmText);
+          setPhase(alarmText);
+          notify(`⚠ ${alarmText}`);
+          focusCountry(playerCountryId);
+          return;
+        }
+        setPlayerAlarm(null);
         setPhase(result.attempts.length > 1
           ? `Po ${result.attempts.length} losowaniach: kierunek ${result.direction.short}. Kliknij „Losuj wielkość”.`
           : `Kierunek ${result.direction.short} jest możliwy. Kliknij „Losuj wielkość”.`);
@@ -736,13 +748,58 @@ export default function Home() {
       highlightRef.current = result.changedIndices;
       activeTurnRef.current = null;
       setActiveTurnId(null);
-      refresh(engine); autosave(engine); paint(); setPhase(result.record.text);
+      refresh(engine); autosave(engine); paint();
+      setPlayerAlarm(null);
+      const playerName = playerCountryId === null ? null : engine.getCountry(playerCountryId)?.name ?? null;
+      if (playerName && result.record.eliminated === playerName) {
+        setPhase("Twoje państwo zniknęło z mapy");
+        notify("⚠ Twoje państwo zniknęło z mapy");
+      } else setPhase(result.record.text);
       if (draft.action === "war" && battleFx && animationMode !== "off") setBattleFx((current) => current ? { ...current, phase: "front" } : current);
       setDraft({}); setStage("country");
       if (highlightTimer.current) clearTimeout(highlightTimer.current);
       highlightTimer.current = window.setTimeout(() => { highlightRef.current = []; setBattleFx(null); paint(); }, animationMode === "full" ? 1700 : 850);
     } finally { busyRef.current = false; setBusy(false); }
-  }, [animationMode, autosave, battleFx, draft, engine, focusCountry, gameMode, paint, ready, refresh, speed, spin, stage]);
+  }, [animationMode, autosave, battleFx, draft, engine, focusCountry, gameMode, notify, paint, playerCountryId, ready, refresh, speed, spin, stage]);
+
+  const applyWarVeto = useCallback(async () => {
+    if (!engine || gameMode !== "war" || busyRef.current) return;
+    if (stage !== "size" || draft.countryId === undefined || !draft.action) return;
+    busyRef.current = true; setBusy(true);
+    try {
+      const result = engine.vetoDirection(draft.countryId, draft.action);
+      if (!result) return;
+      const left = engine.getWarVetoesLeft();
+      setPhase("Weto: losuję nowy kierunek…");
+      await spin("direction", DIRECTIONS.map((item) => `${arrows[item.short]} ${item.short}`), `${arrows[result.direction.short]} ${result.direction.short}`, 320);
+      if (!result.valid) {
+        setBattleFx(null);
+        setPlayerAlarm(null);
+        setDraft((current) => ({ ...current, direction: undefined, targetId: undefined, size: undefined, fraction: undefined }));
+        setWheels((current) => ({ ...current, size: "—" }));
+        setStage("direction");
+        setPhase("Po wecie brak celu, losuj kierunek ponownie");
+        return;
+      }
+      setDraft((current) => ({ ...current, direction: result.direction, targetId: result.targetId, size: undefined, fraction: undefined }));
+      if (result.impactIndex !== null && animationMode !== "off") {
+        setBattleFx({ x: ((result.impactIndex % MAP_W) + 0.5) / MAP_W * 100, y: (Math.floor(result.impactIndex / MAP_W) + 0.5) / MAP_H * 100, direction: result.direction, phase: "aim", key: Date.now() });
+      } else setBattleFx(null);
+      setWheels((current) => ({ ...current, size: "—" }));
+      if (playerCountryId !== null && result.targetId === playerCountryId) {
+        const defenderName = engine.getCountry(playerCountryId)?.name ?? "Twoje państwo";
+        const attacker = engine.getCountry(draft.countryId);
+        const alarmText = `ALARM: ${defenderName} jest celem ataku ${attacker?.name ?? "przeciwnika"} z kierunku ${result.direction.short}`;
+        setPlayerAlarm(alarmText);
+        setPhase(alarmText);
+        notify(`⚠ ${alarmText}`);
+        focusCountry(playerCountryId);
+        return;
+      }
+      setPlayerAlarm(null);
+      setPhase(`Weto: nowy kierunek ${result.direction.short} (zostało ${left})`);
+    } finally { busyRef.current = false; setBusy(false); }
+  }, [animationMode, draft, engine, focusCountry, gameMode, notify, playerCountryId, spin, stage]);
 
   const stopAuto = useCallback(() => {
     autoRunRef.current = false;
@@ -845,6 +902,7 @@ export default function Home() {
         const plan = engine.planTurn();
         if (!plan) { const winner = engine.getWinner(); setPhase(winner ? `Grę wygrał: ${winner.name}` : "Nie ma już kraju, który może wykonać ruch"); break; }
         const actor = engine.getCountry(plan.countryId);
+        if (engine.isPlayerThreatened(plan)) notify(`⚠ ${engine.getCountry(engine.playerCountryId)?.name ?? "Twoje państwo"} jest celem ataku ${actor?.name ?? "przeciwnika"}`);
         const action = ACTIONS.find((item) => item.key === plan.action);
         setWheels({
           country: actor ? `${actor.flag} ${actor.name}` : "—",
@@ -868,7 +926,11 @@ export default function Home() {
         refresh(engine);
         autosave(engine);
         paint();
-        setPhase(result.record.text);
+        const autoPlayerName = engine.playerCountryId === null ? null : engine.getCountry(engine.playerCountryId)?.name ?? null;
+        if (autoPlayerName && result.record.eliminated === autoPlayerName) {
+          setPhase("Twoje państwo zniknęło z mapy");
+          notify("⚠ Twoje państwo zniknęło z mapy");
+        } else setPhase(result.record.text);
         if (remaining !== null) {
           remaining -= 1;
           setAutoRemaining(remaining);
@@ -907,8 +969,10 @@ export default function Home() {
   }, [focusCountry, playerCountryId, runStage]);
 
   const undo = () => {
-    if (!engine || busy || !engine.undo()) return;
-    setDraft({}); setStage("country"); setBattleFx(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = []; refresh(engine); autosave(engine); paint();
+    if (!engine || busy) return;
+    if (gameMode === "war" && engine.getWarUndosLeft() <= 0) { notify("Wyczerpałeś cofnięcia w tej partii"); return; }
+    if (!engine.undo()) return;
+    setDraft({}); setStage("country"); setBattleFx(null); setPlayerAlarm(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = []; refresh(engine); autosave(engine); paint();
     setPhase(engine.history.at(-1)?.text ?? "Cofnięto do początku rozgrywki");
     setWheels({ country: "—", action: "—", direction: "—", size: "—" }); notify("Ostatnia tura została cofnięta");
   };
@@ -933,7 +997,7 @@ export default function Home() {
     setGameMode(mode); setGameRegion(region); setPlayerCountryId(playerId);
     setRankingSort(mode === "strategy" ? { key: "strength", direction: "desc" } : { key: "rank", direction: "asc" });
     setExpandedRankingCountryId(null);
-    setPendingMode(null); setPendingRegion(null); setStrategicTargetId(null); setWarReport(null);
+    setPendingMode(null); setPendingRegion(null); setStrategicTargetId(null); setWarReport(null); setPlayerAlarm(null);
     setSeedInput(String(seed)); setSpeed(4);
     autosave(engine); refresh(engine);
     setPhase(mode === "strategy" && playerId !== null
@@ -963,7 +1027,7 @@ export default function Home() {
 
   const newGame = () => {
     if (!engine || busy || !confirm("Rozpocząć nową rozgrywkę? Obecny świat zostanie zastąpiony.")) return;
-    setDraft({}); setStage("country"); setBattleFx(null); setWarReport(null); engine.reset(); selectedRef.current = null; setSelectedId(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = [];
+    setDraft({}); setStage("country"); setBattleFx(null); setWarReport(null); setPlayerAlarm(null); engine.reset(); selectedRef.current = null; setSelectedId(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = [];
     refresh(engine); try { localStorage.removeItem(STORAGE_KEY); } catch { /* storage can be unavailable */ } setWheels({ country: "—", action: "—", direction: "—", size: "—" });
     engine.setMicrostateRule("all");
     setGameMode(null); setGameRegion(null); setPendingMode(null); setPendingRegion(null); setPlayerCountryId(null); setStrategicTargetId(null); setMicrostateRule("all"); setSeedInput(""); setSidePanel("history"); setSpeed(4); setPhase("Wybierz tryb nowej rozgrywki"); setMenu(false); resetView(); paint();
@@ -1339,6 +1403,20 @@ export default function Home() {
   })), [mapLabels, mapSize, pan, zoom]);
   const capitalPlacements: CapitalPlacement[] = useMemo(() => engine?.getCapitalPlacements() ?? [], [dataVersion, engine]);
   const cityPlacements: StrategicCityPlacement[] = useMemo(() => engine?.getStrategicCityPlacements() ?? [], [dataVersion, engine]);
+  const warGuarantee = useMemo(() => gameMode === "war" ? engine?.getWarGuarantee() ?? null : null, [dataVersion, engine, gameMode]);
+  const warVetoesLeft = useMemo(() => gameMode === "war" ? engine?.getWarVetoesLeft() ?? 0 : 0, [dataVersion, engine, gameMode]);
+  const warUndosLeft = useMemo(() => gameMode === "war" ? engine?.getWarUndosLeft() ?? 0 : 0, [dataVersion, engine, gameMode]);
+  const warGuaranteeUsed = useMemo(() => gameMode === "war" ? engine?.isWarGuaranteeUsed() ?? false : false, [dataVersion, engine, gameMode]);
+  const lostCapitalCountries = useMemo(() => {
+    if (gameMode !== "war") return new Set<number>();
+    return new Set(capitalPlacements.filter((capital) => !capital.controlled).map((capital) => capital.countryId));
+  }, [capitalPlacements, gameMode]);
+  const warTitle = useCallback((countryId: number) => gameMode === "war" ? engine?.getCountryTitle(countryId) ?? null : null, [dataVersion, engine, gameMode]);
+  const grantWarGuarantee = useCallback((countryId: number) => {
+    if (!engine || busy || gameMode !== "war" || !engine.setWarGuarantee(countryId)) return;
+    refresh(engine); autosave(engine);
+    notify(`Gwarancja obronna dla ${engine.getCountry(countryId)?.name ?? "kraju"}`);
+  }, [autosave, busy, engine, gameMode, notify, refresh]);
   const visibleCapitals = useMemo(() => capitalPlacements.flatMap((capital) => [-1, 0, 1].flatMap((wrap) => {
     const left = mapSize.width / 2 + pan.x + (capital.x / 100 + wrap - .5) * mapSize.width * zoom;
     const top = mapSize.height / 2 + pan.y + (capital.y / 100 - .5) * mapSize.height * zoom;
@@ -1355,7 +1433,7 @@ export default function Home() {
     <main className="app-shell" id="top">
       <header className="topbar">
         <a className="brand" href="#top"><span className="brand-mark"><i /><i /></span><span><strong>LOSY ŚWIATA</strong><small>symulator zmiennych granic</small></span></a>
-        <div className="world-status"><span><b>{turn}</b> tura</span><span><b>{activeCountries}</b> państw</span>{gameMode && <span><b>{gameMode === "war" ? "WAR ONLY" : gameMode === "strategy" ? "STRATEGICZNY" : "PEŁNY"}</b> tryb</span>}<span className={`status ${busy ? "rolling" : "ready"}`}><i />{autoRunning ? `AUTO${typeof autoRemaining === "number" ? ` · ${autoRemaining}` : ""}` : busy ? "TRWA RUNDA" : gameMode === "strategy" ? "DOWÓDZTWO" : `KROK ${stageOrder.indexOf(stage) + 1}/5`}</span></div>
+        <div className="world-status"><span><b>{turn}</b> tura</span><span><b>{activeCountries}</b> państw</span>{gameMode && <span><b>{gameMode === "war" ? "WAR ONLY" : gameMode === "strategy" ? "STRATEGICZNY" : "PEŁNY"}</b> tryb</span>}{warGuarantee && <span title="Gwarancja obronna: ten kraj traci o połowę mniej">🛡 <b>{engine?.getCountry(warGuarantee.countryId)?.name ?? "—"}</b> · {warGuarantee.turnsLeft} tur</span>}<span className={`status ${busy ? "rolling" : "ready"}`}><i />{autoRunning ? `AUTO${typeof autoRemaining === "number" ? ` · ${autoRemaining}` : ""}` : busy ? "TRWA RUNDA" : gameMode === "strategy" ? "DOWÓDZTWO" : `KROK ${stageOrder.indexOf(stage) + 1}/5`}</span></div>
         <div className="top-actions">
           <button className="text-button" onClick={() => setRules(true)}>Zasady</button>
           <div className="menu-wrap"><button className="icon-button" aria-label="Menu zapisu i eksportu" aria-expanded={menu} onClick={() => setMenu((value) => !value)}>•••</button>
@@ -1463,12 +1541,12 @@ export default function Home() {
               {dossierTab === "policies" && selectedDossier.playerPolicyState && <section className="policy-dossier"><header><b>DECYZJE PREZYDENTA</b><span>punkty decyzyjne: <b className="policy-points">{selectedDossier.playerPolicyState!.decisionPoints}</b></span></header><div className="policy-list">{(engine ? engine.getAvailablePlayerPolicies(selectedDossier.countryId) : []).length ? (engine ? engine.getAvailablePlayerPolicies(selectedDossier.countryId) : []).map((policy) => { const isRegional = ["build-port", "modernize-roads", "expand-airport", "rail-upgrade", "fortify-sector"].includes(policy.id); const regionOptions = isRegional ? (selectedDossier.regions ?? []).filter((r) => r.ownerId === selectedDossier.countryId && (policy.id !== "build-port" || r.maritimeAccess > 0)) : []; return <div key={policy.id} className="policy-item"><div><small>{policy.name}</small><b>{policy.cost} PD · {policy.cooldown} kw. cooldown</b><small>{policy.description}</small></div>{isRegional && regionOptions.length ? <select disabled={busy || selectedDossier.playerPolicyState!.decisionPoints < policy.cost} onChange={(event) => { if (engine && event.target.value) { engine.activateLogisticsPolicy(policy.id, Number(event.target.value)); refresh(engine); autosave(engine); notify(`Inwestycja: ${policy.name}`); } }}><option value="">Wybierz region...</option>{regionOptions.map((r) => <option key={r.id} value={r.id}>{r.name} · {Math.round(r.areaKm2 ?? 0)} km²</option>)}</select> : <button disabled={busy || selectedDossier.playerPolicyState!.decisionPoints < policy.cost || policy.lastUsedTurn > 0} onClick={() => { if (engine && engine.activatePlayerPolicy(policy.id)) { refresh(engine); autosave(engine); notify(`Aktywowano: ${policy.name}`); } }}>Wykonaj</button>}</div>; }) : <small>Brak dostępnych aktów w tej turze.</small>}</div><footer>{(engine ? engine.getCountryLogisticsInvestments(selectedDossier.countryId) : []).length ? <div><small>Aktywne inwestycje:</small>{(engine ? engine.getCountryLogisticsInvestments(selectedDossier.countryId) : []).slice(0, 4).map((inv) => <span key={inv.id}><b>{inv.type}</b><small>{strategicRegions[inv.regionId]?.name ?? `Region ${inv.regionId}`}</small><small>poz. {inv.remainingTurns} kw.</small></span>)}</div> : <span>Brak aktywnych inwestycji.</span>}</footer></section>}
               {dossierTab === "military" && inspectedSectorId !== null && (() => { const sector = strategicRegions[inspectedSectorId]; const ownerId = sector?.ownerId ?? selectedDossier.countryId; const owner = engine?.getCountry(ownerId); const regionLogistics = engine?.getRegionLogistics(inspectedSectorId); const defense = engine?.getStrategicRegionResistance(inspectedSectorId); const terrain = engine?.getStrategicRegionTerrain(inspectedSectorId); const profile = engine?.getStrategicRegionDefenseProfile(inspectedSectorId); return <section className="sector-detail"><header><b>{sector?.name ?? `Sektor ${inspectedSectorId}`}</b><span>{owner?.flag} {owner?.name ?? "—"}</span></header><div><span><small>Obrona <InfoTip>Łączy wielkość sektora, teren i poziom umocnień. Wyższa wartość spowalnia atakującego.</InfoTip></small><b>{defense?.label ?? "—"}</b></span><span><small>Teren <InfoTip>Rzeźba terenu wpływa na tempo marszu, rozpoznanie i liczbę dogodnych osi natarcia.</InfoTip></small><b>{terrain?.label ?? "—"}</b></span><span><small>Umocnienia <InfoTip>Stałe przygotowanie obronne sektora. Możesz je podnosić decyzją „Przygotuj umocnienia” w zakładce Decyzje.</InfoTip></small><b>{profile ? `${profile.fortification}/100` : "—"}</b><i>{profile?.fortificationLabel}</i></span><span><small>Logistyka <InfoTip>Określa sprawność dowozu ludzi, amunicji i paliwa do sektora.</InfoTip></small><b>{typeof regionLogistics === "number" ? Math.round(regionLogistics) : "—"}</b></span></div><footer><p><b>Przeszkoda dla atakującego:</b> {profile?.naturalObstacle ?? terrain?.description ?? ""}. {profile?.attackerBrief ?? ""}</p><p><b>Źródło umocnień:</b> {profile?.source ?? "—"}</p><p>{formatArea(sector?.areaKm2 ?? 0)}. {sector?.provinceNames.length ? sector.provinceNames.join(" · ") : ""}</p></footer></section>; })()}
             </aside>}
-            {hover && <div className="map-tooltip" style={{ left: hover.x, top: hover.y }}><span>{hover.country.flag}</span><strong>{hover.country.name}</strong></div>}
+            {hover && <div className="map-tooltip" style={{ left: hover.x, top: hover.y }}><span>{hover.country.flag}</span><strong>{hover.country.name}</strong>{gameMode === "war" && warTitle(hover.country.id) && <em className="country-title">{warTitle(hover.country.id)}</em>}</div>}
             {last && <div className={`event-ribbon ${last.action}`}><span>{actionIcons[last.action]}</span><p>{last.text}</p><b>{last.directionShort}</b></div>}
             {winner && <div className="winner-announcement" role="status"><span>KONIEC ROZGRYWKI</span><p>GRĘ WYGRAŁ:</p><h2>{winner.flag} {winner.name}</h2><button onClick={newGame}>Nowa rozgrywka</button></div>}
           </div>
           <div className="map-footer"><div className="phase-line"><i className={busy ? "pulse" : ""} /><p>{phase}</p></div>
-            {selected && <div className="selected-country"><span>{selected.country.flag}</span><div><strong>{selected.country.name}</strong><small>{formatArea(selected.area)} · {Math.round(selected.share * 100)}% stanu początkowego</small></div><button onClick={() => setSelectedId(null)} aria-label="Zamknij">×</button></div>}
+            {selected && <div className="selected-country"><span>{selected.country.flag}</span><div><strong>{selected.country.name}{gameMode === "war" && warTitle(selected.country.id) && <em className="country-title">{warTitle(selected.country.id)}</em>}</strong><small>{formatArea(selected.area)} · {Math.round(selected.share * 100)}% stanu początkowego</small></div><button onClick={() => setSelectedId(null)} aria-label="Zamknij">×</button></div>}
           </div>
         </div>
 
@@ -1518,7 +1596,8 @@ export default function Home() {
               <div><button onClick={() => resolveCampaignConflict(true)}>⚔ Kontynuuj atak</button><button onClick={() => resolveCampaignConflict(false)}>Wycofaj wojska</button></div>
             </div> : playerCampaign ? <div className="campaign-card active"><header><span>⚔ AKTYWNA KAMPANIA</span><b>{Math.round(playerCampaign.progress)}%</b></header><strong>{strategicRegions[playerCampaign.regionId]?.name}</strong><small>Przeciwnik: {engine?.getCountry(playerCampaign.defenderId)?.flag} {engine?.getCountry(playerCampaign.defenderId)?.name} · {strategicRegions[playerCampaign.regionId]?.provinceCount ?? 1} prow. · kwartał kampanii {playerCampaign.turns + 1} · siła przeciwnika {engine?.getStrategicStrength(playerCampaign.defenderId).rating}/100</small>{playerCampaign.lastRandomFactor && <small className="campaign-roll">Ostatni kwartał: los ×{playerCampaign.lastRandomFactor.toFixed(2)} · zmiana frontu {playerCampaign.lastMomentum! >= 0 ? "+" : ""}{playerCampaign.lastMomentum?.toFixed(1)} pkt</small>}<div><i style={{ width: `${playerCampaign.progress}%` }} /></div></div> : <><label className="strategy-target"><span>CEL NOWEJ KAMPANII</span><select value={strategicTargetId ?? ""} onChange={(event) => selectStrategicTarget(event.target.value ? Number(event.target.value) : null)}><option value="">Bez nowej wojny w tym kwartale</option>{strategicTargets.map((region) => <option key={region.id} value={region.id}>{engine?.getCountry(region.ownerId)?.flag} {region.name} · {region.provinceCount} prow. · siła {engine?.getStrategicStrength(region.ownerId).rating}/100 · {formatArea(region.areaKm2)}</option>)}</select><small>Wybranie celu automatycznie pokazuje go na mapie. Można atakować sektor lądowo sąsiedni albo położony do 500 km przez nieprzerwane morze.</small></label>
             {selectedTargetDetails && <section className={`target-intelligence ${selectedTargetDetails.assessment.level}`}><header><span>ROZPOZNANIE CELU</span><b>{selectedTargetDetails.assessment.chance}% SZANS</b></header><h3>{selectedTargetDetails.region.name}</h3><p>{selectedTargetDetails.owner?.flag} Kontrola: <b>{selectedTargetDetails.owner?.name}</b>{selectedTargetDetails.originalOwner?.id !== selectedTargetDetails.owner?.id ? ` · historycznie w grze: ${selectedTargetDetails.originalOwner?.name}` : ""}</p><div><span><small>Powierzchnia</small><b>{formatArea(selectedTargetDetails.region.areaKm2)}</b></span><span><small>Prowincje</small><b>{selectedTargetDetails.region.provinceCount}</b></span><span><small>Opór sektora</small><b>{selectedTargetDetails.resistance.label} ×{selectedTargetDetails.resistance.factor.toFixed(2)}</b></span><span><small>Potencjał obrońcy</small><b>{selectedTargetDetails.strength.rating}/100</b></span></div><strong>{selectedTargetDetails.assessment.label}</strong>{selectedTargetDetails.occupation && <em>Integracja obecnego właściciela: {Math.round(selectedTargetDetails.occupation.progress)}%</em>}<small>{selectedTargetDetails.region.provinceNames.join(" · ")}</small></section>}</>}\n            <div className="campaign-overview"><header><b>WOJNY ŚWIATA</b><span>{strategicCampaigns.length} aktywnych</span></header>{strategicCampaigns.slice().sort((a,b)=>b.progress-a.progress).slice(0,6).map((campaign) => <button key={campaign.id} onClick={() => { const region=strategicRegions[campaign.regionId]; if(region){ setSelectedId(region.ownerId); focusCountry(region.ownerId); } }}><span>{engine?.getCountry(campaign.attackerId)?.flag} {engine?.getCountry(campaign.attackerId)?.name}</span><i>→</i><span>{engine?.getCountry(campaign.defenderId)?.flag} {strategicRegions[campaign.regionId]?.name}</span><b>{Math.round(campaign.progress)}%</b></button>)}</div>
-          </div> : <><div className="wheel-grid" aria-live="polite">
+          </div> : <>{gameMode === "war" && playerAlarm && <div className="player-alarm" role="alert"><span aria-hidden="true">⚠</span><div><b>ALARM OBRONNY</b><small>{playerAlarm}</small></div></div>}
+          <div className="wheel-grid" aria-live="polite">
             <Wheel step="01" label="Kraj" value={wheels.country} rolling={activeWheel === "country"} current={stage === "country"} icon="◎" onValueClick={wheelCountryId === null ? undefined : () => { setSelectedId(wheelCountryId); focusCountry(wheelCountryId); }} />
             <Wheel step="02" label="Akcja" value={wheels.action} rolling={activeWheel === "action"} current={stage === "action"} icon="△" />
             <Wheel step="03" label="Kierunek" value={wheels.direction} rolling={activeWheel === "direction"} current={stage === "direction"} icon={wheels.direction.split(" ")[0] || "↑"} />
@@ -1526,7 +1605,10 @@ export default function Home() {
           </div>
           <div className="primary-controls">
             <button className={`turn-button ${stage === "apply" ? "apply" : ""}`} disabled={!ready || !gameMode || busy} onClick={() => void runStage()}><span>{busy ? (stage === "apply" ? "ZMIENIAM GRANICE" : "TRWA LOSOWANIE") : stageLabels[stage]}</span><kbd>SPACJA</kbd></button>
-            <div className="secondary-controls"><button disabled={!engine?.canUndo() || busy} onClick={undo}><span>↶</span> Cofnij ostatnią turę</button></div>
+            <div className="secondary-controls">
+              <button disabled={!engine?.canUndo() || busy || (gameMode === "war" && warUndosLeft === 0)} onClick={undo}><span>↶</span> Cofnij ostatnią turę{gameMode === "war" ? ` (${warUndosLeft})` : ""}</button>
+              {gameMode === "war" && stage === "size" && <button className="veto-button" disabled={busy || warVetoesLeft === 0} title="Weto kierunku: odrzuć wylosowany kierunek i wylosuj nowy" onClick={() => void applyWarVeto()}>WETO ({warVetoesLeft})</button>}
+            </div>
             <div className="auto-controls" aria-label="Automatyczna symulacja">
               {autoRunning ? <button className="auto-stop" onClick={stopAuto}>■ Zatrzymaj po tej turze</button> : <>
                 <button disabled={!ready || !gameMode || busy || stage !== "country"} onClick={() => void runAuto(10)}>▶ 10 tur</button>
@@ -1562,12 +1644,13 @@ export default function Home() {
                   return <div key={entry.countryId} className={`ranking-entry ${!entry.active ? "eliminated" : ""} ${expanded ? "expanded" : ""}`}>
                     <button className="ranking-main" onClick={() => { setSelectedId(entry.countryId); focusCountry(entry.countryId); }}>
                       <b title={entry.active ? `#${entry.rank} według kontrolowanego obszaru` : "Państwo wyeliminowane"}>{entry.active ? entry.rank : "—"}</b>
-                      <span className="ranking-country"><i>{entry.flag}</i><strong>{entry.name}</strong>{s && <small>#{s.rank} potencjału</small>}</span>
+                      <span className="ranking-country"><i>{entry.flag}</i><strong>{entry.name}</strong>{gameMode === "war" && warTitle(entry.countryId) && <em className="country-title">{warTitle(entry.countryId)}</em>}{gameMode === "war" && lostCapitalCountries.has(entry.countryId) && <i className="country-flag-icon lost" title="stolica utracona">⚑</i>}{gameMode === "war" && (engine?.getWarExhaustion(entry.countryId) ?? 0) >= 9 && <i className="country-flag-icon tired" title="zmęczenie wojną">⏳</i>}{gameMode === "war" && warGuarantee?.countryId === entry.countryId && <i className="country-flag-icon guarded" title="gwarancja obronna">🛡</i>}{s && <small>#{s.rank} potencjału</small>}</span>
                       <span className="ranking-area">{formatArea(entry.areaKm2)}</span>
                       {gameMode === "strategy" && <span className="ranking-strength" role="button" tabIndex={0} title={explanation} onClick={(event) => { event.stopPropagation(); setExpandedRankingCountryId(expanded ? null : entry.countryId); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); setExpandedRankingCountryId(expanded ? null : entry.countryId); } }}><b>{s?.rating ?? 0}</b><i>/100</i><em>{expanded ? "▴" : "▾"}</em></span>}
                       <em className={entry.changePercent > 0 ? "up" : entry.changePercent < 0 ? "down" : ""}>{entry.changePercent > 0 ? "+" : ""}{entry.changePercent.toFixed(1)}%</em>
                       <small title="Liczba wyeliminowanych państw">⚔ {entry.defeats}</small>
                     </button>
+                    {gameMode === "war" && !warGuarantee && !warGuaranteeUsed && entry.active && <button className="guarantee-button" title="Gwarancja obronna: przez 10 tur ten kraj traci o połowę mniej" onClick={() => grantWarGuarantee(entry.countryId)}>Gwarancja</button>}
                     {expanded && s && <div className="ranking-breakdown">{Object.entries(s.components).map(([key, value]) => <span key={key}><small>{componentLabels[key as keyof typeof componentLabels]}</small><i><em style={{ width: `${Math.min(100, value)}%` }} /></i><b>{Math.round(value)}</b></span>)}<footer><span>Wyczerpanie <b>{Math.round(s.exhaustion)}%</b></span><span>Integracja <b>{Math.round(s.integration)}%</b></span><span>Siła frontu: liczona dopiero dla konkretnego ataku</span></footer></div>}
                   </div>;
                 })}
