@@ -39,6 +39,7 @@ function engineFrom(owners: Int16Array, elevation?: Uint16Array, sourceCountries
 }
 
 function indexAt(x: number, y: number) { return y * MAP_W + x; }
+function capitalAt(name: string, x: number, y: number) { return { name, latitude: 90 - (y + .5) / MAP_H * 180, longitude: (x + .5) / MAP_W * 360 - 180 }; }
 
 test("capital reference covers every sovereign country used by the game", () => {
   assert.deepEqual(CAPITALS.PL, ["Warsaw", 52.22977, 21.01178]);
@@ -1816,7 +1817,137 @@ test("war mode tracks war exhaustion per country", () => {
   engine.countries.forEach((country) => { country.region = "europe"; });
   engine.setGameMode("war");
   engine.setGameRegion("europe");
-  const warEngine = engine as unknown as { getWarExhaustion(id: number): number };
-  assert.equal(typeof warEngine.getWarExhaustion, "function", "war mode must expose per-country war exhaustion");
-  assert.equal(warEngine.getWarExhaustion(0), 0);
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const west = DIRECTIONS.find((direction) => direction.short === "W") as Direction;
+  assert.equal(engine.getWarExhaustion(0), 0);
+  for (let turn = 0; turn < 3; turn++) engine.apply({ rngBefore: engine.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: .001, targetId: 1 });
+  assert.ok(Math.abs(engine.getWarExhaustion(0) - 9.6) < 1e-12);
+  assert.equal(engine.rollCountry()?.countryId, 1, "a country exhausted by three consecutive attacks must leave the attacker pool");
+  for (let turn = 0; turn < 3; turn++) engine.apply({ rngBefore: engine.rngState, countryId: 1, action: "war", direction: west, directionAttempts: [west], actionWasRerolled: false, size: "tiny", fraction: .001, targetId: 0 });
+  assert.equal(engine.rollCountry()?.countryId, 0, "exhaustion must decay while other countries attack");
+});
+
+test("war mode blocks a country after capital loss and relocates its government after two turns", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 100; y <= 110; y++) for (let x = 100; x <= 110; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 100; y <= 110; y++) for (let x = 111; x <= 130; x++) owners[indexAt(x, y)] = 1;
+  const sourceCountries: Country[] = [
+    { ...countries[0], capital: capitalAt("Stolica A", 105, 105) },
+    { ...countries[1], capital: capitalAt("Stolica B", 111, 105) },
+  ];
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  engine.setGameMode("war");
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const plan: TurnPlan = { rngBefore: engine.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: .001, targetId: 1 };
+  const loss = engine.apply(plan);
+  assert.equal(loss.record.capitalLost, "Cel");
+  assert.match(loss.record.text, /, stolica Cel upada$/);
+  assert.equal(engine.getCapitalPlacements().find(({ countryId }) => countryId === 1)?.controlled, false);
+  assert.equal(engine.rollCountry()?.countryId, 0, "a government without a capital cannot initiate a war");
+  engine.apply({ ...plan, rngBefore: engine.rngState });
+  assert.equal(engine.getCapitalPlacements().find(({ countryId }) => countryId === 1)?.relocated, false);
+  const relocation = engine.apply({ ...plan, rngBefore: engine.rngState });
+  const placement = engine.getCapitalPlacements().find(({ countryId }) => countryId === 1);
+  assert.equal(relocation.record.capitalRelocated, "Cel");
+  assert.equal(placement?.relocated, true);
+  assert.equal(placement?.controlled, true);
+  assert.equal(placement?.name, "Siedziba rządu, Cel");
+});
+
+test("war mode increases gains against a country without a capital up to the defender clamp", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 200; y < 210; y++) for (let x = 200; x < 208; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 200; y < 210; y++) for (let x = 208; x < 228; x++) owners[indexAt(x, y)] = 1;
+  const sourceCountries: Country[] = [
+    { ...countries[0], capital: capitalAt("Stolica A", 203, 205) },
+    { ...countries[1], capital: capitalAt("Stolica B", 220, 205) },
+  ];
+  const controlled = engineFrom(owners, undefined, sourceCountries);
+  controlled.setGameMode("war");
+  const capitalLess = engineFrom(owners, undefined, sourceCountries);
+  capitalLess.setGameMode("war");
+  const capitalLessSnapshot = capitalLess.snapshot();
+  capitalLessSnapshot.capitalStates![1]!.lostTurn = 0;
+  capitalLess.load(capitalLessSnapshot);
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const plan: TurnPlan = { rngBefore: controlled.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "medium", fraction: .2, targetId: 1 };
+  const defenderClampKm2 = controlled.getCountryKm2(1) * plan.fraction;
+  const controlledGain = controlled.apply(plan).record.changedKm2;
+  const capitalLessGain = capitalLess.apply(plan).record.changedKm2;
+  assert.ok(capitalLessGain > controlledGain, "loss of the capital must increase territorial losses");
+  assert.ok(capitalLessGain <= defenderClampKm2 + 1e-6, "the defender-side fraction remains a hard ceiling");
+});
+
+test("war mode targets a top-three country more often than a uniform direction roll", () => {
+  const sourceCountries: Country[] = Array.from({ length: 9 }, (_, id) => ({ id, iso: `C${id}`, name: `Kraj ${id}`, flag: `${id}`, color: [20 + id, 40 + id, 60 + id] as [number, number, number], initialWeight: 0 }));
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let index = 0; index < sourceCountries.length; index++) {
+    const cells = index === 0 ? 100 : index === 1 ? 80 : index === 2 ? 60 : 10;
+    for (let cell = 0; cell < cells; cell++) owners[indexAt(100 + cell, 100 + index * 3)] = index;
+  }
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  engine.setGameMode("war");
+  const directionTargets = new Map(DIRECTIONS.map((direction, index) => [direction.key, index + 1]));
+  (engine as unknown as { targetInDirection: (actorId: number, direction: Direction) => { countryId: number; index: number; distance: number; offset: number } }).targetInDirection = (_actorId, direction) => ({ countryId: directionTargets.get(direction.key)!, index: 0, distance: 1, offset: 0 });
+  let leaderHits = 0;
+  for (let sample = 0; sample < 200; sample++) if (engine.rollDirection(0, "war").targetId === 1) leaderHits++;
+  assert.ok(leaderHits > 50, `top-three target received ${leaderHits} of 200 rolls, expected more than the uniform average of 25`);
+});
+
+test("war snapshots preserve exhaustion and capitals, reject wrong lengths, and load legacy defaults", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 300; y <= 310; y++) for (let x = 300; x <= 310; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 300; y <= 310; y++) for (let x = 311; x <= 330; x++) owners[indexAt(x, y)] = 1;
+  const sourceCountries: Country[] = [
+    { ...countries[0], capital: capitalAt("Stolica A", 305, 305) },
+    { ...countries[1], capital: capitalAt("Stolica B", 311, 305) },
+  ];
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  engine.setGameMode("war");
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  engine.apply({ rngBefore: engine.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: .001, targetId: 1 });
+  const snapshot = engine.snapshot();
+  const restored = engineFrom(owners, undefined, sourceCountries);
+  restored.load(snapshot);
+  assert.equal(restored.getWarExhaustion(0), 3.2);
+  assert.deepEqual(restored.snapshot().capitalStates, snapshot.capitalStates);
+  assert.equal(restored.getCapitalPlacements().find(({ countryId }) => countryId === 1)?.controlled, false);
+  assert.equal(isSnapshot({ ...snapshot, capitalStates: snapshot.capitalStates?.slice(1) }), false);
+  assert.equal(engine.undo(), true);
+  assert.equal(engine.getWarExhaustion(0), 0);
+  assert.equal(engine.getCapitalPlacements().find(({ countryId }) => countryId === 1)?.controlled, true);
+  const { warExhaustion: _warExhaustion, capitalStates: _capitalStates, ...legacySnapshot } = snapshot;
+  const legacy = engineFrom(owners, undefined, sourceCountries);
+  legacy.load(legacySnapshot);
+  assert.equal(legacy.getWarExhaustion(0), 0);
+  assert.equal(legacy.getCapitalPlacements().find(({ countryId }) => countryId === 1)?.relocated, false);
+});
+
+test("war mode benches a country after three consecutive wars and lets it return once exhaustion decays", () => {
+  const sourceCountries: Country[] = [...countries, { id: 2, iso: "CC", name: "Sąsiad", flag: "C", color: [70, 180, 100], initialWeight: 0 }];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 400; y <= 410; y++) {
+    for (let x = 400; x <= 410; x++) owners[indexAt(x, y)] = 0;
+    for (let x = 411; x <= 425; x++) owners[indexAt(x, y)] = 1;
+    for (let x = 426; x <= 440; x++) owners[indexAt(x, y)] = 2;
+  }
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  engine.setGameMode("war");
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const warPlan = (countryId: number, targetId: number): TurnPlan => ({ rngBefore: engine.rngState, countryId, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: .001, targetId });
+
+  for (let attack = 0; attack < 3; attack++) engine.apply(warPlan(0, 1));
+  assert.ok(engine.getWarExhaustion(0) >= 9, `three consecutive wars must reach the exhaustion limit, got ${engine.getWarExhaustion(0)}`);
+  for (let draw = 0; draw < 60; draw++) assert.notEqual(engine.rollCountry()?.countryId, 0, "an exhausted country must not be drawn while rested neighbours can still act");
+
+  engine.apply(warPlan(1, 2));
+  assert.ok(engine.getWarExhaustion(0) < 9, "a turn spent idle must decay the exhaustion below the limit");
+  let returned = false;
+  for (let draw = 0; draw < 60 && !returned; draw++) returned = engine.rollCountry()?.countryId === 0;
+  assert.ok(returned, "a rested country must become eligible again");
 });

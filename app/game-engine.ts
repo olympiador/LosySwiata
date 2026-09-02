@@ -27,6 +27,11 @@ const FLAG_TEXTURE_H = 128;
 const LAND_KM2 = 148_940_000;
 const MAX_WAR_GAP_KM = 1_200;
 const WAR_THEATER_GAP_KM = 350;
+const WAR_EXHAUSTION_GAIN = 3.2;
+const WAR_EXHAUSTION_DECAY = 2.5;
+const WAR_EXHAUSTION_LIMIT = 9;
+const WAR_LEADER_TARGET_CHANCE = 1 / 3;
+const WAR_CAPITAL_RELOCATION_TURNS = 2;
 const STRATEGIC_NAVAL_RANGE_KM = 500;
 
 export type ActionKey = "war" | "land" | "erosion";
@@ -242,10 +247,13 @@ export type TurnRecord = {
   actualFraction?: number;
   partial?: boolean;
   eliminated: string | null;
+  capitalLost?: string;
+  capitalRelocated?: string;
   text: string;
 };
 
-type Undo = { rngBefore: number; changed: Array<[number, number]>; color: [number, number, number]; countryId: number; defeatedId: number | null };
+type WarCapitalState = { index: number | null; lostTurn: number | null; relocated: boolean };
+type Undo = { rngBefore: number; changed: Array<[number, number]>; color: [number, number, number]; countryId: number; defeatedId: number | null; warExhaustion?: number[]; capitalStates?: Array<WarCapitalState | null> };
 
 export type CountryRanking = {
   rank: number;
@@ -273,6 +281,8 @@ export type GameSnapshot = {
   strategicFortifications?: number[];
   strategicDefenseState?: StrategicDefenseState;
   strategicCapitals?: Array<StrategicCapitalLocation | null>;
+  warExhaustion?: number[];
+  capitalStates?: Array<WarCapitalState | null>;
   colors?: Array<[number, number, number]>;
   mapRevision?: number;
   width: number;
@@ -763,6 +773,8 @@ export class WorldEngine {
   private strategicExhaustion: number[] = [];
   private strategicDefenseState: StrategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 };
   private strategicCapitals: Array<StrategicCapitalLocation | null> = [];
+  private warExhaustion: number[] = [];
+  private capitalStates: Array<WarCapitalState | null> = [];
   private pendingCapitalRelocations = new Set<number>();
   private nextCampaignId = 1;
   private strategicBorderKey = "";
@@ -789,6 +801,8 @@ export class WorldEngine {
     this.elevation = elevation;
     this.admin1At = admin1At;
     this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, undefined);
+    this.warExhaustion = countries.map(() => 0);
+    this.capitalStates = this.initialWarCapitalStates();
     for (let y = 0; y < MAP_H; y++) {
       const latitude = 90 - ((y + 0.5) / MAP_H) * 180;
       this.rowWeight[y] = Math.max(0.02, Math.cos(latitude * Math.PI / 180));
@@ -2668,6 +2682,17 @@ export class WorldEngine {
     return this.getCountry(this.owners[y * MAP_W + x]);
   }
 
+  private initialWarCapitalStates(): Array<WarCapitalState | null> {
+    return this.countries.map((country) => {
+      if (!country.capital) return null;
+      const x = ((country.capital.longitude + 180) / 360 + 1) % 1;
+      const y = Math.max(0, Math.min(1, (90 - country.capital.latitude) / 180));
+      const sourceX = wrapX(Math.floor(x * MAP_W));
+      const sourceY = Math.max(0, Math.min(MAP_H - 1, Math.floor(y * MAP_H)));
+      return { index: sourceY * MAP_W + sourceX, lostTurn: null, relocated: false };
+    });
+  }
+
   private initializeStrategicCapitals() {
     this.strategicCapitals = this.countries.map((country) => {
       if (!country.capital) return null;
@@ -2736,6 +2761,21 @@ export class WorldEngine {
       return [{ countryId: country.id, countryName: country.name, name: capital.name, x: capital.x, y: capital.y, controlled: this.strategicRegions[capital.regionId]?.ownerId === country.id, regionId: capital.regionId, relocated: capital.relocated }];
     });
     const stats = this.stats();
+    if (this.gameMode === "war") return this.countries.flatMap((country) => {
+      const capital = this.capitalStates[country.id];
+      if (!capital || capital.index === null || !stats[country.id]?.cells) return [];
+      const x = capital.index % MAP_W, y = Math.floor(capital.index / MAP_W);
+      return [{
+        countryId: country.id,
+        countryName: country.name,
+        name: capital.relocated ? `Siedziba rządu, ${country.name}` : country.capital?.name ?? country.name,
+        x: (x + .5) / MAP_W * 100,
+        y: (y + .5) / MAP_H * 100,
+        controlled: this.owners[capital.index] === country.id,
+        regionId: null,
+        relocated: capital.relocated,
+      }];
+    });
     return this.countries.flatMap((country) => {
       if (!country.capital || !stats[country.id]?.cells) return [];
       const x = ((country.capital.longitude + 180) / 360 + 1) % 1;
@@ -2754,6 +2794,7 @@ export class WorldEngine {
       }];
     });
   }
+  getWarExhaustion(id: number): number { return this.warExhaustion[id] ?? 0; }
   getCountryKm2(id: number) { return (this.stats()[id]?.weight ?? 0) * this.km2PerWeight; }
   getCountryInitialKm2(id: number) { return (this.countries[id]?.initialWeight ?? 0) * this.km2PerWeight; }
   getCountryShare(id: number) {
@@ -2965,6 +3006,28 @@ export class WorldEngine {
     return best;
   }
 
+  private relocatedWarCapitalIndex(countryId: number, stats: Stats[]) {
+    const territory = this.largestRemainingTerritory(countryId, countryId, stats);
+    if (!territory) return null;
+    const visited = new Uint8Array(this.owners.length), queue = [territory.seed], steps = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    visited[territory.seed] = 1;
+    let nearest = territory.seed, nearestDistance = Infinity;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const index = queue[cursor], x = index % MAP_W, y = Math.floor(index / MAP_W);
+      const distance = gridDistanceKm(territory.cx, territory.cy, x, y);
+      if (distance < nearestDistance || (distance === nearestDistance && index < nearest)) { nearest = index; nearestDistance = distance; }
+      for (const [ox, oy] of steps) {
+        const ny = y + oy;
+        if (ny < 0 || ny >= MAP_H) continue;
+        const next = ny * MAP_W + wrapX(x + ox);
+        if (visited[next] || this.owners[next] !== countryId) continue;
+        visited[next] = 1;
+        queue.push(next);
+      }
+    }
+    return nearest;
+  }
+
   private coast(actorId: number, direction: Direction, stats: Stats[]) {
     const result: Array<{ own: number; sea: number; score: number }> = [];
     const sx = Math.sign(direction.dx), sy = Math.sign(direction.dy), origin = stats[actorId];
@@ -3046,11 +3109,33 @@ export class WorldEngine {
     return stats[actorId].cells > 3 && this.borderSeeds(actorId, direction.dx, direction.dy, stats).length > 0;
   }
 
+  private preferredWarDirection(actorId: number, stats: Stats[]) {
+    if (this.random() >= WAR_LEADER_TARGET_CHANCE) return null;
+    const leaders = new Set(this.getRanking().filter(({ active }) => active).slice(0, 3).map(({ countryId }) => countryId));
+    for (const direction of DIRECTIONS) {
+      const hit = this.targetInDirection(actorId, direction, stats);
+      if (hit && leaders.has(hit.countryId)) return { direction, hit };
+    }
+    return null;
+  }
+
   private pickActor(stats: Stats[]) {
     const active = this.countries.filter(({ id }) => stats[id].cells > 0 && this.canCountryAct(id));
     if (!active.length) return null;
     const start = Math.floor(this.random() * active.length) % active.length;
     if (this.gameMode === "full") return active[start];
+    if (this.gameMode === "war") {
+      const eligible = active.filter(({ id }) => this.capitalStates[id]?.lostTurn === null || this.capitalStates[id] === null);
+      const eligibleIds = new Set(eligible.map(({ id }) => id));
+      const ready = new Set(eligible.filter(({ id }) => (this.warExhaustion[id] ?? 0) < WAR_EXHAUSTION_LIMIT).map(({ id }) => id));
+      const readyCanAct = eligible.some(({ id }) => ready.has(id) && DIRECTIONS.some((direction) => this.valid(id, "war", direction, stats)));
+      for (let offset = 0; offset < active.length; offset++) {
+        const actor = active[(start + offset) % active.length];
+        if (!eligibleIds.has(actor.id) || (readyCanAct && !ready.has(actor.id))) continue;
+        if (DIRECTIONS.some((direction) => this.valid(actor.id, "war", direction, stats))) return actor;
+      }
+      return null;
+    }
     for (let offset = 0; offset < active.length; offset++) {
       const actor = active[(start + offset) % active.length];
       if (DIRECTIONS.some((direction) => this.valid(actor.id, "war", direction, stats))) return actor;
@@ -3075,6 +3160,10 @@ export class WorldEngine {
   rollDirection(countryId: number, action: ActionKey) {
     const stats = this.stats();
     const attempts: Direction[] = [];
+    if (this.gameMode === "war" && action === "war") {
+      const preferred = this.preferredWarDirection(countryId, stats);
+      if (preferred) return { direction: preferred.direction, valid: true, targetId: preferred.hit.countryId, impactIndex: preferred.hit.index, attempts: [preferred.direction] };
+    }
     for (let attempt = 0; attempt < 64; attempt++) {
       const direction = this.pick(DIRECTIONS);
       attempts.push(direction);
@@ -3107,8 +3196,12 @@ export class WorldEngine {
     const actor = this.pickActor(stats);
     if (!actor) return null;
     const actions = this.availableActions();
-    let action = this.pickAction(stats), direction = this.pick(DIRECTIONS), found = false, actionWasRerolled = false;
+    let action = this.pickAction(stats), direction = this.gameMode === "war" ? DIRECTIONS[0] : this.pick(DIRECTIONS), found = false, actionWasRerolled = false;
     const directionAttempts: Direction[] = [];
+    if (this.gameMode === "war" && action === "war") {
+      const preferred = this.preferredWarDirection(actor.id, stats);
+      if (preferred) { direction = preferred.direction; directionAttempts.push(direction); found = true; }
+    }
     for (let actionTry = 0; actionTry < 7 && !found; actionTry++) {
       const tried = new Set<string>();
       for (let directionTry = 0; directionTry < 16; directionTry++) {
@@ -3734,10 +3827,14 @@ export class WorldEngine {
   apply(plan: TurnPlan) {
     const before = this.stats(), actor = this.countries[plan.countryId], changed: Array<[number, number]> = [];
     const actorColorBefore: [number, number, number] = [actor.color[0], actor.color[1], actor.color[2]];
+    const warExhaustionBefore = this.gameMode === "war" ? [...this.warExhaustion] : undefined;
+    const capitalStatesBefore = this.gameMode === "war" ? this.capitalStates.map((capital) => capital ? { ...capital } : null) : undefined;
     let goal = before[plan.countryId].weight * plan.fraction;
     let target: Country | null = null;
     if (plan.action === "war" && plan.targetId !== null) {
       target = this.countries[plan.targetId];
+      const targetCapital = this.capitalStates[target.id];
+      if (this.gameMode === "war" && targetCapital && targetCapital.lostTurn !== null) goal *= 1.5;
       // TINY–LARGE remains a percentage of the attacker, but the same rolled
       // percentage is also a hard ceiling on the defender. Only ALL may erase
       // the entire defending state in one action.
@@ -3829,7 +3926,27 @@ export class WorldEngine {
     const eliminated = target && after[target.id].cells === 0 ? target.name : null;
     if (eliminated && target) this.defeats[actor.id]++;
     this.turn++;
-    const text = plan.action === "war" && target
+    let capitalLost: string | undefined, capitalRelocated: string | undefined;
+    if (this.gameMode === "war") {
+      if (plan.action === "war") this.warExhaustion = this.warExhaustion.map((value, id) => id === actor.id ? value + WAR_EXHAUSTION_GAIN : Math.max(0, value - WAR_EXHAUSTION_DECAY));
+      for (const country of this.countries) {
+        const capital = this.capitalStates[country.id];
+        if (!capital || capital.index === null || capital.lostTurn !== null || this.owners[capital.index] === country.id) continue;
+        capital.lostTurn = this.turn;
+        capitalLost ??= country.name;
+      }
+      for (const country of this.countries) {
+        const capital = this.capitalStates[country.id];
+        if (!capital || capital.lostTurn === null || this.turn - capital.lostTurn < WAR_CAPITAL_RELOCATION_TURNS || !after[country.id]?.cells) continue;
+        const index = this.relocatedWarCapitalIndex(country.id, after);
+        if (index === null) continue;
+        capital.index = index;
+        capital.lostTurn = null;
+        capital.relocated = true;
+        capitalRelocated ??= country.name;
+      }
+    }
+    let text = plan.action === "war" && target
       ? eliminated
         ? `${actor.name} przejmuje całe terytorium: ${target.name}.`
         : partial
@@ -3842,15 +3959,19 @@ export class WorldEngine {
         : partial
           ? `${actor.name} traci przez erozję tylko około ${formatNumber(changedKm2)} km² — zachowano minimalne terytorium państwa.`
           : `${actor.name} traci przez erozję około ${formatNumber(changedKm2)} km².`;
+    if (capitalLost) text = `${text.replace(/\.$/, "")}, stolica ${capitalLost} upada`;
     const record: TurnRecord = {
       turn: this.turn, countryId: actor.id, countryName: actor.name, countryFlag: actor.flag,
       action: plan.action, direction: plan.direction.label, directionShort: plan.direction.short,
       size: plan.size, fraction: plan.fraction, targetId: target?.id ?? null,
       targetName: target?.name ?? null, targetFlag: target?.flag ?? null,
-      changedKm2, actualFraction, partial, eliminated, text,
+      changedKm2, actualFraction, partial, eliminated, ...(capitalLost ? { capitalLost } : {}), ...(capitalRelocated ? { capitalRelocated } : {}), text,
     };
     this.history = [...this.history, record].slice(-120);
-    this.undoStack = [...this.undoStack, { rngBefore: plan.rngBefore, changed, color: actorColorBefore, countryId: actor.id, defeatedId: eliminated && target ? target.id : null }].slice(-40);
+    this.undoStack = [...this.undoStack, {
+      rngBefore: plan.rngBefore, changed, color: actorColorBefore, countryId: actor.id, defeatedId: eliminated && target ? target.id : null,
+      ...(warExhaustionBefore ? { warExhaustion: warExhaustionBefore } : {}), ...(capitalStatesBefore ? { capitalStates: capitalStatesBefore } : {}),
+    }].slice(-40);
     return { record, changedIndices: changed.map(([index]) => index) };
   }
 
@@ -3863,6 +3984,8 @@ export class WorldEngine {
     if (undo.defeatedId !== null) this.defeats[undo.countryId] = Math.max(0, this.defeats[undo.countryId] - 1);
     if (undo.changed.length) this.visualRevision++;
     this.rngState = undo.rngBefore;
+    if (undo.warExhaustion) this.warExhaustion = [...undo.warExhaustion];
+    if (undo.capitalStates) this.capitalStates = undo.capitalStates.map((capital) => capital ? { ...capital } : null);
     this.turn = Math.max(0, this.turn - 1);
     this.history.pop();
     return true;
@@ -3880,6 +4003,8 @@ export class WorldEngine {
     this.history = [];
     this.defeats.fill(0);
     this.undoStack = [];
+    this.warExhaustion = this.countries.map(() => 0);
+    this.capitalStates = this.initialWarCapitalStates();
     this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, undefined);
     this.playerPolicyState.decisionPoints = 0;
     this.playerPolicyState.lastDecisionTurn = 0;
@@ -3920,6 +4045,8 @@ export class WorldEngine {
       strategicFortifications: this.gameMode === "strategy" ? this.strategicRegions.map(({ fortification }) => fortification) : undefined,
       strategicDefenseState: this.gameMode === "strategy" ? { ...this.strategicDefenseState } : undefined,
       strategicCapitals: this.gameMode === "strategy" ? this.strategicCapitals.map((capital) => capital ? { ...capital } : null) : undefined,
+      warExhaustion: this.gameMode === "war" ? [...this.warExhaustion] : undefined,
+      capitalStates: this.gameMode === "war" ? this.capitalStates.map((capital) => capital ? { ...capital } : null) : undefined,
       colors: this.countries.map(({ color }) => [color[0], color[1], color[2]]),
       mapRevision: CURRENT_MAP_REVISION,
       width: MAP_W,
@@ -3939,6 +4066,8 @@ export class WorldEngine {
     if (snapshot.mapRevision !== undefined && snapshot.mapRevision > CURRENT_MAP_REVISION) throw new Error("Ten zapis pochodzi z nowszej wersji mapy.");
     if (snapshot.colors !== undefined && snapshot.colors.length !== this.countries.length) throw new Error("Plik zapisu ma nieprawidłową listę państw.");
     if (snapshot.defeats !== undefined && (snapshot.defeats.length !== this.countries.length || snapshot.defeats.some((count) => !Number.isInteger(count) || count < 0))) throw new Error("Plik zapisu ma nieprawidłowe statystyki państw.");
+    if (snapshot.warExhaustion !== undefined && snapshot.warExhaustion.length !== this.countries.length) throw new Error("Plik zapisu ma nieprawidłowy stan zmęczenia wojną.");
+    if (snapshot.capitalStates !== undefined && snapshot.capitalStates.length !== this.countries.length) throw new Error("Plik zapisu ma nieprawidłowy stan stolic.");
     if (snapshot.strategicTerritoryLog?.some((event) => event.fromOwnerId >= this.countries.length || event.toOwnerId >= this.countries.length)) throw new Error("Log zapisu odwołuje się do nieistniejącego państwa.");
     for (const record of snapshot.history) {
       if (record.countryId >= this.countries.length || (record.targetId !== null && record.targetId >= this.countries.length)) throw new Error("Historia zapisu odwołuje się do nieistniejącego państwa.");
@@ -4040,6 +4169,8 @@ export class WorldEngine {
     }
     this.history = nextHistory; this.undoStack = [];
     this.defeats = snapshot.defeats ? [...snapshot.defeats] : this.countries.map(({ id }) => nextHistory.filter((record) => record.countryId === id && record.eliminated).length);
+    this.warExhaustion = snapshot.warExhaustion ? [...snapshot.warExhaustion] : this.countries.map(() => 0);
+    this.capitalStates = snapshot.capitalStates ? snapshot.capitalStates.map((capital) => capital ? { ...capital } : null) : this.initialWarCapitalStates();
     this.directionTargetCache.clear();
     this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, snapshot.countryCapabilityStates);
     this.visualRevision++;
@@ -4787,6 +4918,19 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
   if (candidate.colors !== undefined && (!Array.isArray(candidate.colors) || !candidate.colors.every((color) =>
     Array.isArray(color) && color.length === 3 && color.every((channel) => finite(channel, 0, 255))))) return false;
   if (candidate.defeats !== undefined && (!Array.isArray(candidate.defeats) || !candidate.defeats.every((count) => integer(count, 0)))) return false;
+  const countryCount = Array.isArray(candidate.colors) ? candidate.colors.length
+    : Array.isArray(candidate.defeats) ? candidate.defeats.length
+      : Array.isArray(candidate.countryCapabilityStates) ? candidate.countryCapabilityStates.length
+        : undefined;
+  if (candidate.warExhaustion !== undefined && (!Array.isArray(candidate.warExhaustion)
+    || countryCount === undefined || candidate.warExhaustion.length !== countryCount
+    || !candidate.warExhaustion.every((value) => finite(value, 0)))) return false;
+  if (candidate.capitalStates !== undefined && (!Array.isArray(candidate.capitalStates)
+    || countryCount === undefined || candidate.capitalStates.length !== countryCount
+    || !candidate.capitalStates.every((capital) => capital === null || Boolean(capital) && typeof capital === "object"
+      && (capital.index === null || integer(capital.index, 0, expectedCells - 1))
+      && (capital.lostTurn === null || finite(capital.lostTurn, 0))
+      && typeof capital.relocated === "boolean"))) return false;
   if (candidate.playerCountryId !== undefined && candidate.playerCountryId !== null && !integer(candidate.playerCountryId, 0)) return false;
   if (candidate.strategicRegionSchema !== undefined && candidate.strategicRegionSchema !== 1 && candidate.strategicRegionSchema !== 2 && candidate.strategicRegionSchema !== 3 && candidate.strategicRegionSchema !== 4 && candidate.strategicRegionSchema !== 5) return false;
   if (candidate.strategicRegionOwners !== undefined && (!Array.isArray(candidate.strategicRegionOwners) || !candidate.strategicRegionOwners.every((id) => integer(id, 0)))) return false;
@@ -4854,6 +4998,8 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
       && (record.actualFraction === undefined || finite(record.actualFraction, 0))
       && (record.partial === undefined || typeof record.partial === "boolean")
       && (record.eliminated === null || typeof record.eliminated === "string")
+      && (record.capitalLost === undefined || typeof record.capitalLost === "string")
+      && (record.capitalRelocated === undefined || typeof record.capitalRelocated === "string")
       && typeof record.text === "string";
   });
 }
