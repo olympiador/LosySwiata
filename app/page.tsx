@@ -1664,7 +1664,7 @@ export default function Home() {
               <button className={sidePanel === "ranking" ? "active" : ""} onClick={() => setSidePanel("ranking")}>Ranking</button>
               <button className={sidePanel === "chronicle" ? "active" : ""} onClick={() => setSidePanel("chronicle")}>Kronika</button>
             </nav>
-            {sidePanel === "history" && <><header><h3>Historia świata</h3><span>{history.length ? `${history.length} ostatnich zdarzeń` : "brak zdarzeń"}</span></header><div className="history-list">{history.length ? history.slice(0, 12).map((record) => <History key={`${record.turn}-${record.countryId}`} record={record} />) : <div className="empty-history"><span>◇</span><p>Pierwsza zmiana granic pojawi się tutaj po rozegraniu tury.</p></div>}</div></>}
+            {sidePanel === "history" && <><header><h3>Historia świata</h3><span>{history.length ? `${history.length} ostatnich zdarzeń` : "brak zdarzeń"}</span></header><div className="history-list">{history.length ? history.slice(0, 12).map((record) => <History key={`${record.turn}-${record.countryId}${record.cataclysm ? "-kataklizm" : ""}`} record={record} />) : <div className="empty-history"><span>◇</span><p>Pierwsza zmiana granic pojawi się tutaj po rozegraniu tury.</p></div>}</div></>}
             {sidePanel === "ranking" && <>
               <header><h3>{gameMode === "strategy" ? "Ranking potencjału" : "Ranking państw"}</h3><span>{activeCountries} aktywnych</span></header>
               {gameMode === "strategy" && <p className="ranking-note">Domyślnie według potencjału państwa. Ranking terytorialny pozostaje osobną kolumną.</p>}
