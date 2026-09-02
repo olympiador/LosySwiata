@@ -1951,3 +1951,16 @@ test("war mode benches a country after three consecutive wars and lets it return
   for (let draw = 0; draw < 60 && !returned; draw++) returned = engine.rollCountry()?.countryId === 0;
   assert.ok(returned, "a rested country must become eligible again");
 });
+
+test("war mode limits direction vetoes to three per game", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 500; y <= 510; y++) for (let x = 500; x <= 510; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 500; y <= 510; y++) for (let x = 511; x <= 530; x++) owners[indexAt(x, y)] = 1;
+  const engine = engineFrom(owners);
+  engine.setGameMode("war");
+  assert.equal(engine.getWarVetoesLeft(), 3);
+  for (let use = 0; use < 3; use++) assert.notEqual(engine.vetoDirection(0, "war"), null);
+  assert.equal(engine.getWarVetoesLeft(), 0);
+  assert.equal(engine.vetoDirection(0, "war"), null);
+});
