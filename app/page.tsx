@@ -237,13 +237,21 @@ function Wheel({ step, label, value, icon, rolling, current, onValueClick }: { s
   );
 }
 
+// Powód częściowego wykonania silnik dopisuje w tekście rekordu po myślniku.
+function partialWarningText(record: TurnRecord) {
+  const reason = record.text.split("—")[1]?.trim().replace(/\.$/, "");
+  const done = Math.round((record.actualFraction ?? 0) * 100);
+  const planned = Math.round(record.fraction * 100);
+  return `Kierunek ${record.directionShort} się dławi: wykonano ${done}% zamiast ${planned}%${reason ? ` (${reason})` : ""}`;
+}
+
 function History({ record }: { record: TurnRecord }) {
   const strategic = record.directionShort === "REG";
   return (
     <article className="history-item">
-      <span className={`history-icon ${record.action}`}>{actionIcons[record.action]}</span>
+      <span className={`history-icon ${record.action}`}>{record.cataclysm ? "🌊" : actionIcons[record.action]}</span>
       <div>
-        <header><b>Tura {record.turn}</b><em>{strategic ? "KAMPANIA" : `${SIZE_LABELS[record.size]}${record.partial ? " · CZĘŚCIOWO" : ""}`}</em>{record.capitalLost && <em className="history-flag">STOLICA UPADŁA</em>}{record.capitalRelocated && <em className="history-flag relocated">NOWA SIEDZIBA</em>}</header>
+        <header><b>Tura {record.turn}</b><em>{strategic ? "KAMPANIA" : `${SIZE_LABELS[record.size]}${record.partial ? " · CZĘŚCIOWO" : ""}`}</em>{record.capitalLost && <em className="history-flag">STOLICA UPADŁA</em>}{record.capitalRelocated && <em className="history-flag relocated">NOWA SIEDZIBA</em>}{record.cataclysm && <em className="history-flag">KATAKLIZM</em>}{record.bridgeTo && <em className="history-flag relocated">MOST LĄDOWY</em>}</header>
         <p>{record.text}</p>
         <small>{record.countryFlag} {record.countryName} · {record.directionShort} · {strategic ? record.changedKm2 > 0 ? formatArea(record.changedKm2) : "ruch strategiczny" : record.partial ? `wykonano ${Math.round((record.actualFraction ?? 0) * 100)}% zamiast ${Math.round(record.fraction * 100)}%` : `${Math.round(record.fraction * 100)}%`}</small>
       </div>
@@ -512,6 +520,7 @@ export default function Home() {
         setGameMode(restoredMode);
         setGameRegion(restoredMode ? instance.gameRegion : null);
         setMicrostateRule(instance.microstateRule);
+        setCataclysmOption(instance.isCataclysmEnabled());
         setPlayerCountryId(instance.playerCountryId);
         setSeedInput(String(instance.seed));
         refresh(instance);
@@ -641,12 +650,25 @@ export default function Home() {
     setActiveWheel(null);
   }, [speed]);
 
+  // Wspólne zgłoszenia trybu pełnego po apply(): częściowe wykonanie, most lądowy,
+  // kataklizm. Wywoływane i z ręcznej tury, i z automatu, żeby oba szły tym samym torem.
+  const announceFullModeEvents = useCallback((result: ReturnType<WorldEngine["apply"]>) => {
+    if (gameMode !== "full") return;
+    if (result.record.partial) {
+      setPartialWarning(partialWarningText(result.record));
+      notify("Akcja wykonana częściowo");
+    } else setPartialWarning(null);
+    if (result.record.bridgeTo) notify(`◆ Nowy ląd połączył ${result.record.countryName} z ${result.record.bridgeTo}`);
+    if (result.cataclysmRecord) notify("🌊 Kataklizm: morza zalały niziny");
+  }, [gameMode, notify]);
+
   const runStage = useCallback(async () => {
     if (!engine || !ready || !gameMode || busyRef.current) return;
     busyRef.current = true; setBusy(true); setMenu(false);
     try {
       if (stage === "country") {
         setBattleFx(null);
+        setPartialWarning(null);
         const result = engine.rollCountry();
         if (!result) { const winner = engine.getWinner(); setPhase(winner ? `Grę wygrał: ${winner.name}` : "Nie ma już kraju, który może wykonać ruch"); return; }
         const actor = engine.getCountry(result.countryId);
@@ -753,17 +775,18 @@ export default function Home() {
       setActiveTurnId(null);
       refresh(engine); autosave(engine); paint();
       setPlayerAlarm(null);
+      announceFullModeEvents(result);
       const playerName = playerCountryId === null ? null : engine.getCountry(playerCountryId)?.name ?? null;
       if (playerName && result.record.eliminated === playerName) {
         setPhase("Twoje państwo zniknęło z mapy");
         notify("⚠ Twoje państwo zniknęło z mapy");
-      } else setPhase(result.record.text);
+      } else setPhase(result.cataclysmRecord?.text ?? result.record.text);
       if (draft.action === "war" && battleFx && animationMode !== "off") setBattleFx((current) => current ? { ...current, phase: "front" } : current);
       setDraft({}); setStage("country");
       if (highlightTimer.current) clearTimeout(highlightTimer.current);
       highlightTimer.current = window.setTimeout(() => { highlightRef.current = []; setBattleFx(null); paint(); }, animationMode === "full" ? 1700 : 850);
     } finally { busyRef.current = false; setBusy(false); }
-  }, [animationMode, autosave, battleFx, draft, engine, focusCountry, gameMode, notify, paint, playerCountryId, ready, refresh, speed, spin, stage]);
+  }, [animationMode, announceFullModeEvents, autosave, battleFx, draft, engine, focusCountry, gameMode, notify, paint, playerCountryId, ready, refresh, speed, spin, stage]);
 
   const applyWarVeto = useCallback(async () => {
     if (!engine || gameMode !== "war" || busyRef.current) return;
@@ -932,16 +955,18 @@ export default function Home() {
         refresh(engine);
         autosave(engine);
         paint();
+        announceFullModeEvents(result);
         const autoPlayerName = engine.playerCountryId === null ? null : engine.getCountry(engine.playerCountryId)?.name ?? null;
         if (autoPlayerName && result.record.eliminated === autoPlayerName) {
           setPhase("Twoje państwo zniknęło z mapy");
           notify("⚠ Twoje państwo zniknęło z mapy");
-        } else setPhase(result.record.text);
+        } else setPhase(result.cataclysmRecord?.text ?? result.record.text);
         if (remaining !== null) {
           remaining -= 1;
           setAutoRemaining(remaining);
         }
-        if (pauseOnMajor && (result.record.eliminated || result.record.size === "all")) {
+        // Kataklizm to wydarzenie tej samej wagi co eliminacja — automat staje.
+        if (pauseOnMajor && (result.record.eliminated || result.record.size === "all" || result.cataclysmRecord)) {
           autoRunRef.current = false;
           notify("Automat zatrzymał się na dużym wydarzeniu");
         }
@@ -959,7 +984,7 @@ export default function Home() {
       setActiveTurnId(null);
       paint();
     }
-  }, [autosave, engine, focusStrategicRegion, gameMode, notify, paint, pauseOnMajor, ready, refresh, resetView, stage]);
+  }, [announceFullModeEvents, autosave, engine, focusStrategicRegion, gameMode, notify, paint, pauseOnMajor, ready, refresh, resetView, stage]);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
@@ -978,7 +1003,7 @@ export default function Home() {
     if (!engine || busy) return;
     if (gameMode === "war" && engine.getWarUndosLeft() <= 0) { notify("Wyczerpałeś cofnięcia w tej partii"); return; }
     if (!engine.undo()) return;
-    setDraft({}); setStage("country"); setBattleFx(null); setPlayerAlarm(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = []; refresh(engine); autosave(engine); paint();
+    setDraft({}); setStage("country"); setBattleFx(null); setPlayerAlarm(null); setPartialWarning(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = []; refresh(engine); autosave(engine); paint();
     setPhase(engine.history.at(-1)?.text ?? "Cofnięto do początku rozgrywki");
     setWheels({ country: "—", action: "—", direction: "—", size: "—" }); notify("Ostatnia tura została cofnięta");
   };
@@ -987,6 +1012,7 @@ export default function Home() {
     if (!engine || !ready || busy) return;
     setPendingMode(mode);
     setPendingRegion(null);
+    setCataclysmOption(false);
   };
 
   const requestedSeed = () => {
@@ -998,12 +1024,12 @@ export default function Home() {
 
   const startConfiguredGame = (mode: GameMode, region: GameRegion, seed: number, playerId: number | null) => {
     if (!engine) return;
-    engine.reset(seed, mode, region, microstateRule);
+    engine.reset(seed, mode, region, microstateRule, mode === "full" ? { cataclysm: cataclysmOption } : undefined);
     engine.setPlayerCountry(playerId);
     setGameMode(mode); setGameRegion(region); setPlayerCountryId(playerId);
     setRankingSort(mode === "strategy" ? { key: "strength", direction: "desc" } : { key: "rank", direction: "asc" });
     setExpandedRankingCountryId(null);
-    setPendingMode(null); setPendingRegion(null); setStrategicTargetId(null); setWarReport(null); setPlayerAlarm(null);
+    setPendingMode(null); setPendingRegion(null); setStrategicTargetId(null); setWarReport(null); setPlayerAlarm(null); setPartialWarning(null);
     setSeedInput(String(seed)); setSpeed(4);
     autosave(engine); refresh(engine);
     setPhase(mode === "strategy" && playerId !== null
@@ -1098,7 +1124,7 @@ export default function Home() {
     try {
       const parsed: unknown = JSON.parse(await file.text());
       if (!isSnapshot(parsed)) throw new Error("To nie jest zapis gry Losy Świata.");
-      engine.load(parsed); setGameMode(engine.gameMode); setGameRegion(engine.gameRegion); setMicrostateRule(engine.microstateRule); setPlayerCountryId(engine.playerCountryId); setSeedInput(String(engine.seed)); setPendingMode(null); setPendingRegion(null); setDraft({}); setStage("country"); setBattleFx(null); selectedRef.current = null; setSelectedId(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = [];
+      engine.load(parsed); setGameMode(engine.gameMode); setGameRegion(engine.gameRegion); setMicrostateRule(engine.microstateRule); setCataclysmOption(engine.isCataclysmEnabled()); setPartialWarning(null); setPlayerCountryId(engine.playerCountryId); setSeedInput(String(engine.seed)); setPendingMode(null); setPendingRegion(null); setDraft({}); setStage("country"); setBattleFx(null); selectedRef.current = null; setSelectedId(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = [];
       refresh(engine); autosave(engine); setPhase(engine.history.at(-1)?.text ?? "Wczytano zapis gry"); paint(); notify("Rozgrywka została wczytana");
     } catch (error) { notify(error instanceof Error ? error.message : "Nie udało się wczytać pliku"); }
     setMenu(false);
@@ -1446,7 +1472,7 @@ export default function Home() {
     <main className="app-shell" id="top">
       <header className="topbar">
         <a className="brand" href="#top"><span className="brand-mark"><i /><i /></span><span><strong>LOSY ŚWIATA</strong><small>symulator zmiennych granic</small></span></a>
-        <div className="world-status"><span><b>{turn}</b> tura</span><span><b>{activeCountries}</b> państw</span>{gameMode && <span><b>{gameMode === "war" ? "WAR ONLY" : gameMode === "strategy" ? "STRATEGICZNY" : "PEŁNY"}</b> tryb</span>}{warGuarantee && <span title="Gwarancja obronna: ten kraj traci o połowę mniej">🛡 <b>{engine?.getCountry(warGuarantee.countryId)?.name ?? "—"}</b> · {warGuarantee.turnsLeft} tur</span>}<span className={`status ${busy ? "rolling" : "ready"}`}><i />{autoRunning ? `AUTO${typeof autoRemaining === "number" ? ` · ${autoRemaining}` : ""}` : busy ? "TRWA RUNDA" : gameMode === "strategy" ? "DOWÓDZTWO" : `KROK ${stageOrder.indexOf(stage) + 1}/5`}</span></div>
+        <div className="world-status"><span><b>{turn}</b> tura</span><span><b>{activeCountries}</b> państw</span>{gameMode && <span><b>{gameMode === "war" ? "WAR ONLY" : gameMode === "strategy" ? "STRATEGICZNY" : "PEŁNY"}</b> tryb</span>}{cataclysmIn !== null && <span title="Kataklizm zalewa niziny całego świata co 40 tur">🌊 kataklizm za <b>{cataclysmIn === CATACLYSM_EVERY_TURNS ? "teraz" : `${cataclysmIn} tur`}</b></span>}{warGuarantee && <span title="Gwarancja obronna: ten kraj traci o połowę mniej">🛡 <b>{engine?.getCountry(warGuarantee.countryId)?.name ?? "—"}</b> · {warGuarantee.turnsLeft} tur</span>}<span className={`status ${busy ? "rolling" : "ready"}`}><i />{autoRunning ? `AUTO${typeof autoRemaining === "number" ? ` · ${autoRemaining}` : ""}` : busy ? "TRWA RUNDA" : gameMode === "strategy" ? "DOWÓDZTWO" : `KROK ${stageOrder.indexOf(stage) + 1}/5`}</span></div>
         <div className="top-actions">
           <button className="text-button" onClick={() => setRules(true)}>Zasady</button>
           <div className="menu-wrap"><button className="icon-button" aria-label="Menu zapisu i eksportu" aria-expanded={menu} onClick={() => setMenu((value) => !value)}>•••</button>
@@ -1610,6 +1636,7 @@ export default function Home() {
             </div> : playerCampaign ? <div className="campaign-card active"><header><span>⚔ AKTYWNA KAMPANIA</span><b>{Math.round(playerCampaign.progress)}%</b></header><strong>{strategicRegions[playerCampaign.regionId]?.name}</strong><small>Przeciwnik: {engine?.getCountry(playerCampaign.defenderId)?.flag} {engine?.getCountry(playerCampaign.defenderId)?.name} · {strategicRegions[playerCampaign.regionId]?.provinceCount ?? 1} prow. · kwartał kampanii {playerCampaign.turns + 1} · siła przeciwnika {engine?.getStrategicStrength(playerCampaign.defenderId).rating}/100</small>{playerCampaign.lastRandomFactor && <small className="campaign-roll">Ostatni kwartał: los ×{playerCampaign.lastRandomFactor.toFixed(2)} · zmiana frontu {playerCampaign.lastMomentum! >= 0 ? "+" : ""}{playerCampaign.lastMomentum?.toFixed(1)} pkt</small>}<div><i style={{ width: `${playerCampaign.progress}%` }} /></div></div> : <><label className="strategy-target"><span>CEL NOWEJ KAMPANII</span><select value={strategicTargetId ?? ""} onChange={(event) => selectStrategicTarget(event.target.value ? Number(event.target.value) : null)}><option value="">Bez nowej wojny w tym kwartale</option>{strategicTargets.map((region) => <option key={region.id} value={region.id}>{engine?.getCountry(region.ownerId)?.flag} {region.name} · {region.provinceCount} prow. · siła {engine?.getStrategicStrength(region.ownerId).rating}/100 · {formatArea(region.areaKm2)}</option>)}</select><small>Wybranie celu automatycznie pokazuje go na mapie. Można atakować sektor lądowo sąsiedni albo położony do 500 km przez nieprzerwane morze.</small></label>
             {selectedTargetDetails && <section className={`target-intelligence ${selectedTargetDetails.assessment.level}`}><header><span>ROZPOZNANIE CELU</span><b>{selectedTargetDetails.assessment.chance}% SZANS</b></header><h3>{selectedTargetDetails.region.name}</h3><p>{selectedTargetDetails.owner?.flag} Kontrola: <b>{selectedTargetDetails.owner?.name}</b>{selectedTargetDetails.originalOwner?.id !== selectedTargetDetails.owner?.id ? ` · historycznie w grze: ${selectedTargetDetails.originalOwner?.name}` : ""}</p><div><span><small>Powierzchnia</small><b>{formatArea(selectedTargetDetails.region.areaKm2)}</b></span><span><small>Prowincje</small><b>{selectedTargetDetails.region.provinceCount}</b></span><span><small>Opór sektora</small><b>{selectedTargetDetails.resistance.label} ×{selectedTargetDetails.resistance.factor.toFixed(2)}</b></span><span><small>Potencjał obrońcy</small><b>{selectedTargetDetails.strength.rating}/100</b></span></div><strong>{selectedTargetDetails.assessment.label}</strong>{selectedTargetDetails.occupation && <em>Integracja obecnego właściciela: {Math.round(selectedTargetDetails.occupation.progress)}%</em>}<small>{selectedTargetDetails.region.provinceNames.join(" · ")}</small></section>}</>}\n            <div className="campaign-overview"><header><b>WOJNY ŚWIATA</b><span>{strategicCampaigns.length} aktywnych</span></header>{strategicCampaigns.slice().sort((a,b)=>b.progress-a.progress).slice(0,6).map((campaign) => <button key={campaign.id} onClick={() => { const region=strategicRegions[campaign.regionId]; if(region){ setSelectedId(region.ownerId); focusCountry(region.ownerId); } }}><span>{engine?.getCountry(campaign.attackerId)?.flag} {engine?.getCountry(campaign.attackerId)?.name}</span><i>→</i><span>{engine?.getCountry(campaign.defenderId)?.flag} {strategicRegions[campaign.regionId]?.name}</span><b>{Math.round(campaign.progress)}%</b></button>)}</div>
           </div> : <>{gameMode === "war" && playerAlarm && <div className="player-alarm" role="alert"><span aria-hidden="true">⚠</span><div><b>ALARM OBRONNY</b><small>{playerAlarm}</small></div></div>}
+          {gameMode === "full" && partialWarning && <div className="partial-warning" role="status"><span aria-hidden="true">◐</span><div><b>AKCJA CZĘŚCIOWA</b><small>{partialWarning}</small></div></div>}
           <div className="wheel-grid" aria-live="polite">
             <Wheel step="01" label="Kraj" value={wheels.country} rolling={activeWheel === "country"} current={stage === "country"} icon="◎" onValueClick={wheelCountryId === null ? undefined : () => { setSelectedId(wheelCountryId); focusCountry(wheelCountryId); }} />
             <Wheel step="02" label="Akcja" value={wheels.action} rolling={activeWheel === "action"} current={stage === "action"} icon="△" />
@@ -1729,6 +1756,10 @@ export default function Home() {
             <label className={microstateRule === "all" ? "selected" : ""}><input type="radio" name="microstates" checked={microstateRule === "all"} onChange={() => setMicrostateRule("all")} /><span><b>Wszystkie grają</b><small>Każde państwo może być losowane i wygrać.</small></span></label>
             <label className={microstateRule === "exclude" ? "selected" : ""}><input type="radio" name="microstates" checked={microstateRule === "exclude"} onChange={() => setMicrostateRule("exclude")} /><span><b>Bez mikropaństw</b><small>Kraje poniżej 10 000 km² nie wykonują tur i nie mogą wygrać, ale można je podbić.</small></span></label>
           </fieldset>
+          {pendingMode === "full" && <fieldset className="cataclysm-picker">
+            <legend>Kataklizmy</legend>
+            <label className={cataclysmOption ? "selected" : ""}><input type="checkbox" checked={cataclysmOption} onChange={(event) => setCataclysmOption(event.target.checked)} /><span><b>Kataklizmy co 40 tur (morza zalewają niziny całego świata)</b><small>Co czterdziestą turę każde grające państwo traci część najniżej położonego terytorium. Wyłączone domyślnie.</small></span></label>
+          </fieldset>}
           <div className="region-options">
             {regionOptions.map((option) => <button key={option.key} className={`region-option ${option.key === "world" ? "featured" : ""}`} disabled={!ready || !engine} onClick={() => chooseGameRegion(option.key)}>
               <span aria-hidden="true">{option.icon}</span><span><strong>{regionLabels[option.key]}</strong><small>{option.detail}</small></span><b>→</b>
