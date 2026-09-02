@@ -1798,6 +1798,8 @@ test("ranking tracks defeats and preserves them through save, load and undo", ()
 
   assert.equal(engine.getRanking().find((entry) => entry.countryId === 0)?.defeats, 1);
   assert.equal(engine.getRanking().find((entry) => entry.countryId === 1)?.active, false);
+  assert.equal(engine.getRanking().find((entry) => entry.countryId === 0)?.rank, 1, "the surviving state must be first in the live War only ranking");
+  assert.equal(engine.getRanking().find((entry) => entry.countryId === 1)?.rank, 0, "an eliminated state must not consume a territorial rank");
   const restored = engineFrom(owners);
   restored.load(engine.snapshot());
   assert.equal(restored.getRanking().find((entry) => entry.countryId === 0)?.defeats, 1);

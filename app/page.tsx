@@ -1165,16 +1165,16 @@ export default function Home() {
     if (!engine) return [];
     const strengths = gameMode === "strategy" ? new Map(engine.getStrategicStrengths().map((entry) => [entry.countryId, entry])) : null;
     return engine.getRanking()
-      .filter((entry) => engine.isCountryPlayable(entry.countryId))
-      .map((entry, index) => {
+      .filter((entry) => engine.canCountryAct(entry.countryId))
+      .map((entry) => {
         const country = engine.getCountry(entry.countryId);
-        return { ...entry, rank: index + 1, name: country?.name ?? "Nieznane państwo", flag: country?.flag ?? "", strength: strengths?.get(entry.countryId) ?? null };
+        return { ...entry, name: country?.name ?? "Nieznane państwo", flag: country?.flag ?? "", strength: strengths?.get(entry.countryId) ?? null };
       });
   }, [dataVersion, engine, gameMode]);
   const sortedRanking = useMemo(() => [...ranking].sort((first, second) => {
     let comparison = 0;
     if (rankingSort.key === "country") comparison = first.name.localeCompare(second.name, "pl");
-    else if (rankingSort.key === "rank") comparison = first.rank - second.rank;
+    else if (rankingSort.key === "rank") comparison = (first.rank || Number.MAX_SAFE_INTEGER) - (second.rank || Number.MAX_SAFE_INTEGER);
     else if (rankingSort.key === "area") comparison = first.areaKm2 - second.areaKm2;
     else if (rankingSort.key === "strength") comparison = (first.strength?.power ?? 0) - (second.strength?.power ?? 0);
     else if (rankingSort.key === "change") comparison = first.changePercent - second.changePercent;
@@ -1557,7 +1557,7 @@ export default function Home() {
                   const explanation = s ? `Potencjał #${s.rank}: gospodarka ${Math.round(s.components.economy)}, ludność ${Math.round(s.components.population)}, technologia ${Math.round(s.components.technology)}, logistyka ${Math.round(s.components.logistics)}, wojsko ${Math.round(s.components.military)}, instytucje ${Math.round(s.components.stability)}. Kliknij wynik, aby rozwinąć.` : "Potencjał jest liczony w trybie strategicznym.";
                   return <div key={entry.countryId} className={`ranking-entry ${!entry.active ? "eliminated" : ""} ${expanded ? "expanded" : ""}`}>
                     <button className="ranking-main" onClick={() => { setSelectedId(entry.countryId); focusCountry(entry.countryId); }}>
-                      <b title={`#${entry.rank} terytorialnie`}>{entry.rank}</b>
+                      <b title={entry.active ? `#${entry.rank} według kontrolowanego obszaru` : "Państwo wyeliminowane"}>{entry.active ? entry.rank : "—"}</b>
                       <span className="ranking-country"><i>{entry.flag}</i><strong>{entry.name}</strong>{s && <small>#{s.rank} potencjału</small>}</span>
                       <span className="ranking-area">{formatArea(entry.areaKm2)}</span>
                       {gameMode === "strategy" && <span className="ranking-strength" role="button" tabIndex={0} title={explanation} onClick={(event) => { event.stopPropagation(); setExpandedRankingCountryId(expanded ? null : entry.countryId); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); setExpandedRankingCountryId(expanded ? null : entry.countryId); } }}><b>{s?.rating ?? 0}</b><i>/100</i><em>{expanded ? "▴" : "▾"}</em></span>}

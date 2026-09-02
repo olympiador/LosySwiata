@@ -234,3 +234,6 @@
 .capital-relocation-options button:hover { border-color: rgba(161, 232, 214, .72); background: rgba(54, 135, 119, .25); }
 .capital-relocation-options small { color: var(--muted); font-size: 8px; }
 .capital-relocation-options em { grid-row: span 2; align-self: center; color: #9edfd3; font-size: 8px; font-style: normal; font-weight: 850; }
+
+/* GPU mapa przeskakuje natychmiast przy fokusie, więc etykiety muszą zrobić to samo. */
+.country-label-layer.is-auto-focusing .country-map-label { transition: none; }

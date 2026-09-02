@@ -2763,15 +2763,16 @@ export class WorldEngine {
 
   getRanking(): CountryRanking[] {
     const stats = this.stats();
-    return this.countries.map((country) => ({
+    const entries = this.countries.map((country) => ({
       rank: 0,
       countryId: country.id,
       areaKm2: stats[country.id].weight * this.km2PerWeight,
       changePercent: country.initialWeight ? (stats[country.id].weight / country.initialWeight - 1) * 100 : 0,
       defeats: this.defeats[country.id] ?? 0,
       active: stats[country.id].cells > 0 && this.canCountryAct(country.id),
-    })).sort((first, second) => second.areaKm2 - first.areaKm2 || second.defeats - first.defeats)
-      .map((entry, index) => ({ ...entry, rank: index + 1 }));
+    })).sort((first, second) => Number(second.active) - Number(first.active) || second.areaKm2 - first.areaKm2 || second.defeats - first.defeats);
+    let rank = 0;
+    return entries.map((entry) => ({ ...entry, rank: entry.active ? ++rank : 0 }));
   }
 
   getWinner() {
