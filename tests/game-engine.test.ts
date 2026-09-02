@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { inflateSync } from "node:zlib";
 import { assignCrimeaToUkraine, assignFrenchGuianaOwner, circularColumnSpan, classifyGameRegion, curatedFortificationBaseline, DIRECTIONS, isCrimeaCoordinate, isKaliningradCoordinate, isSnapshot, MAP_H, MAP_W, WorldEngine, type Country, type Direction, type TurnPlan } from "../app/game-engine";
@@ -1952,15 +1953,153 @@ test("war mode benches a country after three consecutive wars and lets it return
   assert.ok(returned, "a rested country must become eligible again");
 });
 
-test("war mode limits direction vetoes to three per game", () => {
+function warOwners(attackerColumns: number, defenderColumns: number, row = 500) {
   const owners = new Int16Array(MAP_W * MAP_H);
   owners.fill(-1);
-  for (let y = 500; y <= 510; y++) for (let x = 500; x <= 510; x++) owners[indexAt(x, y)] = 0;
-  for (let y = 500; y <= 510; y++) for (let x = 511; x <= 530; x++) owners[indexAt(x, y)] = 1;
+  for (let y = row; y < row + 10; y++) {
+    for (let x = 500; x < 500 + attackerColumns; x++) owners[indexAt(x, y)] = 0;
+    for (let x = 500 + attackerColumns; x < 500 + attackerColumns + defenderColumns; x++) owners[indexAt(x, y)] = 1;
+  }
+  return owners;
+}
+
+test("war mode limits direction vetoes to three per game and rerolls deterministically", () => {
+  const owners = warOwners(11, 20);
   const engine = engineFrom(owners);
   engine.setGameMode("war");
+  const reference = engineFrom(owners);
+  reference.setGameMode("war");
   assert.equal(engine.getWarVetoesLeft(), 3);
-  for (let use = 0; use < 3; use++) assert.notEqual(engine.vetoDirection(0, "war"), null);
+  for (let use = 0; use < 3; use++) {
+    const vetoed = engine.vetoDirection(0, "war");
+    assert.notEqual(vetoed, null, "a veto within the limit must return a fresh direction roll");
+    assert.deepEqual(vetoed, reference.rollDirection(0, "war"), "a veto must be an ordinary roll from the same RNG state");
+  }
   assert.equal(engine.getWarVetoesLeft(), 0);
-  assert.equal(engine.vetoDirection(0, "war"), null);
+  assert.equal(engine.vetoDirection(0, "war"), null, "a fourth veto has no resource left");
+  assert.equal(engineFrom(owners).vetoDirection(0, "war"), null, "outside war mode the veto does not exist");
+  assert.equal(engine.undo(), false, "a veto must not create an undo entry");
+});
+
+test("war mode spends three undos per game while full mode stays unlimited", () => {
+  const owners = warOwners(11, 20, 520);
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const engine = engineFrom(owners);
+  engine.setGameMode("war");
+  assert.equal(engine.getWarUndosLeft(), 3);
+  for (let attack = 0; attack < 4; attack++) engine.apply({ rngBefore: engine.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: .001, targetId: 1 });
+  for (let step = 0; step < 3; step++) {
+    assert.equal(engine.canUndo(), true);
+    assert.equal(engine.undo(), true);
+  }
+  assert.equal(engine.getWarUndosLeft(), 0);
+  assert.equal(engine.canUndo(), false, "an exhausted undo resource must close the button even with entries left");
+  assert.equal(engine.undo(), false);
+
+  const unlimited = engineFrom(owners);
+  for (let attack = 0; attack < 4; attack++) unlimited.apply({ rngBefore: unlimited.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: .001, targetId: 1 });
+  for (let step = 0; step < 4; step++) assert.equal(unlimited.undo(), true, "full mode keeps unlimited undos");
+});
+
+test("war mode grants one defensive guarantee that halves gains for ten turns", () => {
+  const owners = warOwners(8, 20, 540);
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const guarded = engineFrom(owners);
+  guarded.setGameMode("war");
+  assert.equal(guarded.getWarGuarantee(), null);
+  assert.equal(guarded.setWarGuarantee(1), true);
+  assert.deepEqual(guarded.getWarGuarantee(), { countryId: 1, turnsLeft: 10 });
+  assert.equal(guarded.setWarGuarantee(0), false, "the guarantee is available once per game");
+  assert.equal(engineFrom(owners).setWarGuarantee(1), false, "outside war mode the guarantee does not exist");
+
+  const plain = engineFrom(owners);
+  plain.setGameMode("war");
+  const plan: TurnPlan = { rngBefore: plain.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "medium", fraction: .2, targetId: 1 };
+  const guardedGain = guarded.apply({ ...plan, rngBefore: guarded.rngState }).record.changedKm2;
+  const plainGain = plain.apply(plan).record.changedKm2;
+  assert.ok(guardedGain < plainGain, `a guaranteed country must lose less, got ${guardedGain} against ${plainGain}`);
+
+  for (let turn = 1; turn < 10; turn++) guarded.apply({ rngBefore: guarded.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: .001, targetId: 1 });
+  assert.equal(guarded.getWarGuarantee(), null, "the guarantee expires on its own after ten turns");
+  assert.equal(guarded.setWarGuarantee(1), false, "an expired guarantee is not renewable");
+});
+
+test("war mode awards titles for conquests, resilience and an untouched border", () => {
+  const owners = warOwners(40, 6, 560);
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const engine = engineFrom(owners);
+  engine.setGameMode("war");
+  assert.equal(engine.getCountryTitle(0), null, "a fresh full-size country holds no title");
+
+  const conquered = engineFrom(owners);
+  conquered.setGameMode("war");
+  const snapshot = conquered.snapshot();
+  for (const [defeats, title] of [[1, "Zdobywca"], [3, "Imperium"], [5, "Mocarstwo"]] as Array<[number, string]>) {
+    conquered.load({ ...snapshot, defeats: [defeats, 0] });
+    assert.equal(conquered.getCountryTitle(0), title);
+  }
+
+  const battered = engineFrom(owners);
+  battered.setGameMode("war");
+  battered.apply({ rngBefore: battered.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "large", fraction: .6, targetId: 1 });
+  assert.ok(battered.getCountryShare(1) <= .5 && battered.getCountryShare(1) > 0, `the defender must survive on at most half its land, got ${battered.getCountryShare(1)}`);
+  assert.equal(battered.getCountryTitle(1), "Niezłomny");
+
+  const fortress = engineFrom(warOwners(40, 40, 620));
+  fortress.setGameMode("war");
+  for (let turn = 0; turn < 30; turn++) fortress.apply({ rngBefore: fortress.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: .0001, targetId: 1 });
+  assert.ok(fortress.getCountryShare(1) > 0, "the defender must survive so the attacker earns no conquest title");
+  assert.equal(fortress.getCountryTitle(0), "Twierdza", "thirty turns without losing a single cell earn the fortress title");
+
+  const full = engineFrom(owners);
+  full.load({ ...snapshot, mode: "full", defeats: [5, 0] });
+  assert.equal(full.getCountryTitle(0), null, "titles belong to war mode only");
+  assert.ok(!readFileSync(new URL("../app/game-engine.ts", import.meta.url), "utf8").includes("Hegemon"), "the engine must never use the name Hegemon");
+});
+
+test("war snapshots carry vetoes, undos, the guarantee and the minimum share", () => {
+  const owners = warOwners(11, 20, 580);
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const engine = engineFrom(owners);
+  engine.setGameMode("war");
+  engine.setPlayerCountry(1);
+  engine.vetoDirection(0, "war");
+  assert.equal(engine.setWarGuarantee(1), true);
+  engine.apply({ rngBefore: engine.rngState, countryId: 0, action: "war", direction: east, directionAttempts: [east], actionWasRerolled: false, size: "medium", fraction: .2, targetId: 1 });
+  assert.equal(engine.undo(), true);
+  const snapshot = engine.snapshot();
+  assert.equal(snapshot.warVetoesLeft, 2);
+  assert.equal(snapshot.warUndosLeft, 2, "undo spends a resource that undo itself does not give back");
+
+  const restored = engineFrom(owners);
+  restored.load(snapshot);
+  assert.equal(restored.playerCountryId, 1);
+  assert.equal(restored.getWarVetoesLeft(), 2);
+  assert.equal(restored.getWarUndosLeft(), 2);
+  assert.deepEqual(restored.getWarGuarantee(), { countryId: 1, turnsLeft: 10 });
+  assert.deepEqual(restored.snapshot().warMinShare, snapshot.warMinShare);
+  assert.equal(restored.setWarGuarantee(0), false, "a restored game remembers that the guarantee was used");
+  assert.equal(isSnapshot({ ...snapshot, warVetoesLeft: 7 }), false, "more than three vetoes is not a valid save");
+  assert.equal(isSnapshot({ ...snapshot, warMinShare: snapshot.warMinShare?.slice(1) }), false);
+
+  const { warVetoesLeft: _vetoes, warUndosLeft: _undos, warGuarantee: _guarantee, warGuaranteeUsed: _used, warMinShare: _minShare, ...legacy } = snapshot;
+  const older = engineFrom(owners);
+  older.load(legacy);
+  assert.equal(older.getWarVetoesLeft(), 3, "an old save starts a war game with the full veto pool");
+  assert.equal(older.getWarUndosLeft(), 3);
+  assert.equal(older.getWarGuarantee(), null);
+});
+
+test("war mode lets capital-less countries act when nobody else can", () => {
+  const owners = warOwners(11, 20, 600);
+  const sourceCountries: Country[] = [
+    { ...countries[0], capital: capitalAt("Stolica A", 505, 605) },
+    { ...countries[1], capital: capitalAt("Stolica B", 511, 605) },
+  ];
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  engine.setGameMode("war");
+  const snapshot = engine.snapshot();
+  for (const capital of snapshot.capitalStates ?? []) if (capital) capital.lostTurn = 0;
+  engine.load(snapshot);
+  assert.notEqual(engine.rollCountry(), null, "with every capital lost the game must still find an attacker");
 });
