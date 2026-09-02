@@ -258,3 +258,20 @@
 .history-flag.relocated { border-color: rgba(98, 195, 182, .34); color: #b7e9e0; }
 .mode-skip-player { margin-bottom: 10px; padding: 9px 12px; border: 1px dashed rgba(154, 197, 213, .34); border-radius: 9px; background: rgba(154, 197, 213, .06); color: var(--ink); cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .05em; }
 .mode-skip-player:hover:not(:disabled) { border-color: rgba(242, 201, 111, .6); background: rgba(242, 201, 111, .1); }
+.land-ratio{display:inline-flex;align-items:center;gap:6px;color:var(--muted2);font-size:8px;font-weight:850;letter-spacing:.08em}
+.land-ratio i{display:block;overflow:hidden;width:104px;height:5px;border:1px solid var(--line);border-radius:99px;background:rgba(0,0,0,.2)}
+.land-ratio i b{display:block;height:100%;border-radius:99px;background:var(--teal);transition:width .35s ease}
+.land-ratio em{color:var(--ink);font-style:normal;font-variant-numeric:tabular-nums}
+.partial-warning{display:flex;align-items:center;gap:9px;margin-bottom:10px;padding:9px 11px;border:1px solid rgba(242,201,111,.45);border-radius:9px;background:rgba(242,201,111,.1)}
+.partial-warning>span{flex:0 0 auto;color:var(--gold);font-size:15px}
+.partial-warning>div{display:flex;min-width:0;flex-direction:column;gap:1px}
+.partial-warning b{color:#ffe9bd;font-size:10px;font-weight:850;letter-spacing:.07em}
+.partial-warning small{color:var(--muted);font-size:9px}
+.cataclysm-picker{display:grid;max-width:540px;margin:-8px auto 18px;padding:0;border:0;grid-template-columns:1fr;gap:7px;text-align:left}
+.cataclysm-picker legend{margin:0 0 6px;color:var(--gold);font-size:8px;font-weight:850;letter-spacing:.1em;text-transform:uppercase}
+.cataclysm-picker label{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start;padding:10px;border:1px solid var(--line);border-radius:9px;background:rgba(0,0,0,.12);cursor:pointer}
+.cataclysm-picker label.selected{border-color:rgba(98,195,182,.46);background:rgba(98,195,182,.07)}
+.cataclysm-picker input{margin:2px 0 0;accent-color:var(--teal)}
+.cataclysm-picker span{display:flex;min-width:0;flex-direction:column;gap:3px}
+.cataclysm-picker b{color:var(--ink);font-size:9px;text-transform:uppercase}
+.cataclysm-picker small{color:var(--muted2);font-size:8px;line-height:1.4}

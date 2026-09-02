@@ -43,6 +43,7 @@ function useServiceWorker() {
 }
 import {
   ACTIONS,
+  CATACLYSM_EVERY_TURNS,
   DIRECTIONS,
   MAP_H,
   MAP_W,
@@ -300,6 +301,8 @@ export default function Home() {
   const [playerAlarm, setPlayerAlarm] = useState<string | null>(null);
   const [seedInput, setSeedInput] = useState("");
   const [microstateRule, setMicrostateRule] = useState<MicrostateRule>("all");
+  const [cataclysmOption, setCataclysmOption] = useState(false);
+  const [partialWarning, setPartialWarning] = useState<string | null>(null);
   const [sidePanel, setSidePanel] = useState<SidePanel>("history");
   const [rankingSort, setRankingSort] = useState<{ key: RankingSortKey; direction: "asc" | "desc" }>({ key: "rank", direction: "asc" });
   const [expandedRankingCountryId, setExpandedRankingCountryId] = useState<number | null>(null);
@@ -1257,6 +1260,13 @@ export default function Home() {
     : { key, direction: key === "rank" || key === "country" ? "asc" : "desc" }), []);
   const rankingArrow = (key: RankingSortKey) => rankingSort.key === key ? rankingSort.direction === "asc" ? "↑" : "↓" : "↕";
   const winner = useMemo(() => engine?.getWinner() ?? null, [dataVersion, engine]);
+  // Pasek lądu i zegar kataklizmu są liczone z silnika, więc muszą się odświeżać
+  // po każdej turze — stąd dataVersion w zależnościach.
+  const landRatio = useMemo(() => gameMode === "full" && engine ? engine.getLandRatio() : null, [dataVersion, engine, gameMode]);
+  const cataclysmIn = useMemo(() => {
+    if (gameMode !== "full" || !engine || !engine.isCataclysmEnabled()) return null;
+    return CATACLYSM_EVERY_TURNS - (turn % CATACLYSM_EVERY_TURNS);
+  }, [dataVersion, engine, gameMode, turn]);
   const playerCountry = engine?.getCountry(playerCountryId) ?? null;
   const playerCampaign = strategicCampaigns.find(({ attackerId }) => attackerId === playerCountryId) ?? null;
   const playerCampaignConflict = useMemo(() => engine?.getPlayerCampaignConflict() ?? null, [dataVersion, engine]);
@@ -1469,7 +1479,7 @@ export default function Home() {
 
       <section className="game-layout">
         <div className="map-column">
-          <header className="map-heading"><div><span className="eyebrow">{mapStyle === "relief" ? "MAPA GEOGRAFICZNA" : "MAPA POLITYCZNA"} · {gameRegion ? regionLabels[gameRegion].toUpperCase() : "STAN NA ŻYWO"}</span><button className="seed-inline" disabled={!engine} title="Kliknij, aby skopiować seed tej rozgrywki" onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}>seed <b>{engine?.seed ?? "—"}</b> ⧉</button><h1>{last ? `Tura ${last.turn}: ${last.countryName}` : "Świat przed pierwszą turą"}</h1></div><div className="map-legend"><span><i className="change" /> ostatnia zmiana</span><span><i className="border" /> granica</span></div></header>
+          <header className="map-heading"><div><span className="eyebrow">{mapStyle === "relief" ? "MAPA GEOGRAFICZNA" : "MAPA POLITYCZNA"} · {gameRegion ? regionLabels[gameRegion].toUpperCase() : "STAN NA ŻYWO"}</span><button className="seed-inline" disabled={!engine} title="Kliknij, aby skopiować seed tej rozgrywki" onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}>seed <b>{engine?.seed ?? "—"}</b> ⧉</button>{landRatio !== null && <span className="land-ratio" title="Ile lądu zostało względem początku świata. Gdy ubywa, gra częściej losuje nowy ląd, gdy przybywa, częściej erozję."><small>LĄD</small><i><b style={{ width: `${Math.min(100, Math.max(0, Math.round(landRatio * 100)))}%` }} /></i><em>{Math.round(landRatio * 100)}%</em></span>}<h1>{last ? `Tura ${last.turn}: ${last.countryName}` : "Świat przed pierwszą turą"}</h1></div><div className="map-legend"><span><i className="change" /> ostatnia zmiana</span><span><i className="border" /> granica</span></div></header>
           <div className="map-frame" ref={mapRef} onContextMenu={(event) => { event.preventDefault(); setSelectedId(null); }}>
             {!ready && <div className="map-loader"><div className="loader-globe" /><span>{phase}</span></div>}
             <canvas ref={backdropRef} className="map-source" aria-hidden="true" />

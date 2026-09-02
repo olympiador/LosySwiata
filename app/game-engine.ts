@@ -26,7 +26,7 @@ const FLAG_TEXTURE_W = 192;
 const FLAG_TEXTURE_H = 128;
 const LAND_KM2 = 148_940_000;
 const MAX_WAR_GAP_KM = 1_200;
-const CATACLYSM_EVERY_TURNS = 40;
+export const CATACLYSM_EVERY_TURNS = 40;
 const CATACLYSM_FRACTION = .03;
 // A cell that was dry land on the starting map keeps its coastline memory:
 // new land reclaims it before it spreads into never-drowned open sea.
