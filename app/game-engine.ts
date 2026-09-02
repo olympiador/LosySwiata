@@ -2841,6 +2841,7 @@ export class WorldEngine {
     if (this.gameMode !== "war" || !this.warGuarantee || this.turn >= this.warGuarantee.untilTurn) return null;
     return { countryId: this.warGuarantee.countryId, turnsLeft: this.warGuarantee.untilTurn - this.turn };
   }
+  isWarGuaranteeUsed(): boolean { return this.warGuaranteeUsed; }
   getCountryTitle(id: number): string | null {
     if (this.gameMode !== "war" || !this.countries[id]) return null;
     const defeats = this.defeats[id] ?? 0;

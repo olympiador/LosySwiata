@@ -237,3 +237,24 @@
 
 /* GPU mapa przeskakuje natychmiast przy fokusie, więc etykiety muszą zrobić to samo. */
 .country-label-layer.is-auto-focusing .country-map-label { transition: none; }
+
+/* Tryb war: alarm gracza, weto, tytuły i znaczniki rankingu. */
+.player-alarm { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; padding: 9px 11px; border: 1px solid rgba(239, 124, 117, .45); border-radius: 9px; background: rgba(239, 124, 117, .12); animation: pulse 1.1s infinite; }
+.player-alarm > span { flex: 0 0 auto; color: var(--red); font-size: 15px; }
+.player-alarm > div { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
+.player-alarm b { color: #ffd9d5; font-size: 10px; font-weight: 850; letter-spacing: .07em; }
+.player-alarm small { color: var(--muted); font-size: 9px; }
+.veto-button { border: 1px solid rgba(242, 201, 111, .34); border-radius: 8px; background: rgba(242, 201, 111, .08); color: var(--gold); cursor: pointer; font-size: 9px; font-weight: 800; letter-spacing: .07em; }
+.veto-button:hover:not(:disabled) { border-color: rgba(242, 201, 111, .7); background: rgba(242, 201, 111, .16); }
+.veto-button:disabled { opacity: .4; cursor: not-allowed; }
+.country-title { margin-left: 5px; padding: 1px 4px; border: 1px solid rgba(242, 201, 111, .3); border-radius: 4px; color: var(--gold); font-size: 7px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.country-flag-icon { margin-left: 4px; font-size: 9px; font-style: normal; }
+.country-flag-icon.lost { color: var(--red); }
+.country-flag-icon.tired { color: var(--gold); }
+.country-flag-icon.guarded { color: var(--teal); }
+.guarantee-button { padding: 2px 6px; border: 1px solid rgba(98, 195, 182, .35); border-radius: 5px; background: rgba(98, 195, 182, .1); color: var(--teal); cursor: pointer; font-size: 8px; font-weight: 800; letter-spacing: .05em; }
+.guarantee-button:hover:not(:disabled) { border-color: rgba(98, 195, 182, .75); background: rgba(98, 195, 182, .2); }
+.history-flag { margin-left: 6px; padding: 1px 4px; border: 1px solid rgba(239, 124, 117, .34); border-radius: 4px; color: #ffcac5; font-size: 7px; font-weight: 850; letter-spacing: .06em; }
+.history-flag.relocated { border-color: rgba(98, 195, 182, .34); color: #b7e9e0; }
+.mode-skip-player { margin-bottom: 10px; padding: 9px 12px; border: 1px dashed rgba(154, 197, 213, .34); border-radius: 9px; background: rgba(154, 197, 213, .06); color: var(--ink); cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .05em; }
+.mode-skip-player:hover:not(:disabled) { border-color: rgba(242, 201, 111, .6); background: rgba(242, 201, 111, .1); }

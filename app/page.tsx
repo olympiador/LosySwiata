@@ -938,23 +938,27 @@ export default function Home() {
     autosave(engine); refresh(engine);
     setPhase(mode === "strategy" && playerId !== null
       ? `Tryb strategiczny · dowodzisz państwem ${engine.getCountry(playerId)?.name} · wybierz cel pierwszej kampanii`
-      : `${mode === "war" ? "War only" : "Tryb pełny"} · ${regionLabels[region]} — świat czeka na pierwszy ruch`);
+      : mode === "war" && playerId !== null
+        ? `War only · ${regionLabels[region]} · Twoje państwo to ${engine.getCountry(playerId)?.name} — świat czeka na pierwszy ruch`
+        : `${mode === "war" ? "War only" : "Tryb pełny"} · ${regionLabels[region]} — świat czeka na pierwszy ruch`);
     paint();
+    if (mode === "war" && playerId !== null) focusCountry(playerId);
   };
 
   const chooseGameRegion = (region: GameRegion) => {
     if (!engine || !ready || !pendingMode || busy) return;
     const seed = requestedSeed();
     if (seed === null) return;
-    if (pendingMode === "strategy") { setSeedInput(String(seed)); setPendingRegion(region); return; }
+    if (pendingMode === "strategy" || pendingMode === "war") { setSeedInput(String(seed)); setPendingRegion(region); return; }
     startConfiguredGame(pendingMode, region, seed, null);
   };
 
-  const choosePlayerCountry = (countryId: number) => {
-    if (!pendingRegion || pendingMode !== "strategy") return;
+  const choosePlayerCountry = (countryId: number | null) => {
+    if (!pendingRegion || (pendingMode !== "strategy" && pendingMode !== "war")) return;
+    if (countryId === null && pendingMode !== "war") return;
     const seed = requestedSeed();
     if (seed === null) return;
-    startConfiguredGame("strategy", pendingRegion, seed, countryId);
+    startConfiguredGame(pendingMode, pendingRegion, seed, countryId);
   };
 
   const newGame = () => {
@@ -1602,18 +1606,21 @@ export default function Home() {
             </button>
           </div>
           <p className="mode-footnote">{ready ? "W kolejnym kroku wybierzesz obszar rozgrywki." : "Przygotowuję mapę świata…"}</p>
-        </> : pendingMode === "strategy" && pendingRegion ? <>
+        </> : (pendingMode === "strategy" || pendingMode === "war") && pendingRegion ? <>
           <button className="mode-back" onClick={() => setPendingRegion(null)}>← Wróć do obszaru</button>
-          <span className="eyebrow">NOWA ROZGRYWKA · KROK 3 Z 3 · STRATEGICZNY</span>
-          <h2 id="mode-title">Wybierz swoje państwo</h2>
-          <p className="mode-intro">Ty wybierasz cele kampanii tego państwa. Wszystkie pozostałe kraje podejmują decyzje samodzielnie.</p>
+          <span className="eyebrow">NOWA ROZGRYWKA · KROK 3 Z 3 · {pendingMode === "war" ? "WAR ONLY" : "STRATEGICZNY"}</span>
+          <h2 id="mode-title">{pendingMode === "war" ? "Wybierz swoje państwo (opcjonalnie)" : "Wybierz swoje państwo"}</h2>
+          <p className="mode-intro">{pendingMode === "war"
+            ? "Własne państwo daje alarm o ataku, weto kierunku, gwarancję obronną i szybki powrót kamery. Możesz też oglądać świat bez żadnego kraju."
+            : "Ty wybierasz cele kampanii tego państwa. Wszystkie pozostałe kraje podejmują decyzje samodzielnie."}</p>
+          {pendingMode === "war" && <button className="mode-skip-player" disabled={!ready || !engine} onClick={() => choosePlayerCountry(null)}>Graj bez własnego państwa →</button>}
           <div className="country-picker-grid">
             {eligiblePlayerCountries.map((country) => <button key={country.id} disabled={!ready || !engine} onClick={() => choosePlayerCountry(country.id)}><span>{country.flag}</span><strong>{country.name}</strong><small>{formatArea(engine?.getCountryInitialKm2(country.id) ?? 0)}</small><b>GRAJ →</b></button>)}
           </div>
           {!eligiblePlayerCountries.length && <p className="mode-footnote">W tym obszarze nie ma państw spełniających wybrane zasady.</p>}
         </> : <>
           <button className="mode-back" onClick={() => { setPendingMode(null); setPendingRegion(null); }}>← Wróć do trybu</button>
-          <span className="eyebrow">NOWA ROZGRYWKA · KROK 2 {pendingMode === "strategy" ? "Z 3" : "Z 2"} · {pendingMode === "war" ? "WAR ONLY" : pendingMode === "strategy" ? "STRATEGICZNY" : "PEŁNY"}</span>
+          <span className="eyebrow">NOWA ROZGRYWKA · KROK 2 {pendingMode === "full" ? "Z 2" : "Z 3"} · {pendingMode === "war" ? "WAR ONLY" : pendingMode === "strategy" ? "STRATEGICZNY" : "PEŁNY"}</span>
           <h2 id="mode-title">Wybierz obszar</h2>
           <p className="mode-intro">Losowania obejmą tylko państwa wybranego regionu. Pozostała część mapy będzie przygaszona i nie weźmie udziału w grze.</p>
           <div className="seed-picker">
