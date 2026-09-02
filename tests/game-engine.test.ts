@@ -2140,3 +2140,121 @@ test("land ratio starts at one and drops after erosion", () => {
   });
   assert.ok(engine.getLandRatio() < .95, `erosion must lower the ratio, got ${engine.getLandRatio()}`);
 });
+
+function twoBlockWorld() {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 100; y <= 130; y++) for (let x = 100; x <= 130; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 200; y <= 230; y++) for (let x = 300; x <= 330; x++) owners[indexAt(x, y)] = 1;
+  return owners;
+}
+
+function idleTurn(engine: WorldEngine) {
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  return engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "land", direction: east,
+    directionAttempts: [east], actionWasRerolled: false, size: "tiny", fraction: 0, targetId: null,
+  });
+}
+
+test("a disabled cataclysm never touches the world", () => {
+  const engine = engineFrom(twoBlockWorld());
+  assert.equal(engine.isCataclysmEnabled(), false);
+  const before = engine.getStats().map(({ cells }) => cells);
+  for (let turn = 0; turn < 80; turn++) idleTurn(engine);
+  assert.equal(engine.history.some((record) => record.cataclysm), false, "no cataclysm may appear when the option is off");
+  assert.deepEqual(engine.getStats().map(({ cells }) => cells), before);
+});
+
+test("an enabled cataclysm floods every playing country on turn forty and can be undone", () => {
+  const engine = engineFrom(twoBlockWorld());
+  engine.setCataclysm(true);
+  assert.equal(engine.isCataclysmEnabled(), true);
+  for (let turn = 0; turn < 39; turn++) idleTurn(engine);
+  assert.equal(engine.history.some((record) => record.cataclysm), false, "the flood must wait for the fortieth turn");
+
+  const cellsBefore = engine.getStats().map(({ cells }) => cells);
+  const ownersBefore = Int16Array.from(engine.owners);
+  const historyBefore = engine.history.length;
+  const result = idleTurn(engine);
+
+  assert.ok(result.cataclysmRecord, "turn forty must return a second, cataclysm record");
+  assert.equal(result.cataclysmRecord?.cataclysm, true);
+  assert.equal(result.cataclysmRecord?.action, "erosion");
+  assert.equal(result.cataclysmRecord?.turn, 40);
+  assert.ok(result.cataclysmRecord?.text.startsWith("Kataklizm: morza zalewają niziny na całym świecie"));
+  assert.equal(engine.history.length, historyBefore + 2);
+  const cellsAfter = engine.getStats().map(({ cells }) => cells);
+  for (const country of [0, 1]) assert.ok(cellsAfter[country] < cellsBefore[country], `country ${country} must lose land to the flood`);
+  assert.ok(result.changedIndices.some((index) => engine.owners[index] === -1), "the flooded cells belong to the same turn");
+
+  assert.equal(engine.undo(), true);
+  assert.deepEqual(engine.getStats().map(({ cells }) => cells), cellsBefore);
+  assert.deepEqual(Array.from(engine.owners), Array.from(ownersBefore));
+  assert.equal(engine.history.length, historyBefore, "undo removes both records of the turn");
+});
+
+test("a save keeps the cataclysm option and rejects a corrupted one", () => {
+  const engine = engineFrom(twoBlockWorld());
+  engine.setCataclysm(true);
+  const saved = engine.snapshot();
+  assert.equal(saved.cataclysmEnabled, true);
+
+  const restored = engineFrom(twoBlockWorld());
+  restored.load(saved);
+  assert.equal(restored.isCataclysmEnabled(), true);
+
+  const legacy = engineFrom(twoBlockWorld()).snapshot();
+  delete legacy.cataclysmEnabled;
+  const old = engineFrom(twoBlockWorld());
+  old.setCataclysm(true);
+  old.load(legacy);
+  assert.equal(old.isCataclysmEnabled(), false, "an old save means the option was off");
+
+  assert.equal(isSnapshot({ ...saved, cataclysmEnabled: "tak" }), false);
+  assert.equal(isSnapshot(saved), true);
+});
+
+test("new land that closes a strait reports the country it reaches", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 100; y <= 130; y++) for (let x = 100; x <= 130; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 100; y <= 130; y++) for (let x = 134; x <= 160; x++) owners[indexAt(x, y)] = 1;
+  const engine = engineFrom(owners);
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const result = engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "land", direction: east,
+    directionAttempts: [east], actionWasRerolled: false, size: "medium", fraction: .2, targetId: null,
+  });
+  assert.equal(result.record.bridgeTo, "Cel");
+  assert.ok(result.record.text.includes("nowy ląd łączy je z Cel"), result.record.text);
+});
+
+test("new land returns to drowned coastline before it invades open sea", () => {
+  const drowned = (index: number) => {
+    const x = index % MAP_W, y = Math.floor(index / MAP_W);
+    return y >= 100 && y <= 114 && x >= 131 && x <= 150;
+  };
+  const build = (rememberDrowned: boolean) => {
+    const owners = new Int16Array(MAP_W * MAP_H);
+    owners.fill(-1);
+    for (let y = 100; y <= 130; y++) for (let x = 100; x <= 130; x++) owners[indexAt(x, y)] = 0;
+    if (rememberDrowned) for (let index = 0; index < owners.length; index++) if (drowned(index)) owners[index] = 0;
+    const engine = engineFrom(owners);
+    if (rememberDrowned) for (let index = 0; index < owners.length; index++) if (drowned(index)) engine.owners[index] = -1;
+    return engine;
+  };
+  const reclaimedShare = (rememberDrowned: boolean) => {
+    const engine = build(rememberDrowned);
+    const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+    const result = engine.apply({
+      rngBefore: engine.rngState, countryId: 0, action: "land", direction: east,
+      directionAttempts: [east], actionWasRerolled: false, size: "medium", fraction: .2, targetId: null,
+    });
+    assert.ok(result.changedIndices.length > 0);
+    return result.changedIndices.filter(drowned).length / result.changedIndices.length;
+  };
+
+  const withMemory = reclaimedShare(true), withoutMemory = reclaimedShare(false);
+  assert.ok(withMemory > withoutMemory, `drowned land must come back first: ${withMemory} vs ${withoutMemory}`);
+});

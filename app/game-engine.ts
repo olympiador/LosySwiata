@@ -26,6 +26,11 @@ const FLAG_TEXTURE_W = 192;
 const FLAG_TEXTURE_H = 128;
 const LAND_KM2 = 148_940_000;
 const MAX_WAR_GAP_KM = 1_200;
+const CATACLYSM_EVERY_TURNS = 40;
+const CATACLYSM_FRACTION = .03;
+// A cell that was dry land on the starting map keeps its coastline memory:
+// new land reclaims it before it spreads into never-drowned open sea.
+const DROWNED_LAND_BONUS = 6;
 const WAR_THEATER_GAP_KM = 350;
 const WAR_EXHAUSTION_GAIN = 3.2;
 const WAR_EXHAUSTION_DECAY = 2.5;
@@ -255,12 +260,14 @@ export type TurnRecord = {
   eliminated: string | null;
   capitalLost?: string;
   capitalRelocated?: string;
+  cataclysm?: true;
+  bridgeTo?: string;
   text: string;
 };
 
 type WarCapitalState = { index: number | null; lostTurn: number | null; relocated: boolean };
 type WarGuarantee = { countryId: number; untilTurn: number };
-type Undo = { rngBefore: number; changed: Array<[number, number]>; color: [number, number, number]; countryId: number; defeatedId: number | null; warExhaustion?: number[]; capitalStates?: Array<WarCapitalState | null>; warMinShare?: number[] };
+type Undo = { rngBefore: number; changed: Array<[number, number]>; historyEntries?: number; color: [number, number, number]; countryId: number; defeatedId: number | null; warExhaustion?: number[]; capitalStates?: Array<WarCapitalState | null>; warMinShare?: number[] };
 
 export type CountryRanking = {
   rank: number;
@@ -295,6 +302,7 @@ export type GameSnapshot = {
   warGuarantee?: WarGuarantee | null;
   warGuaranteeUsed?: boolean;
   warMinShare?: number[];
+  cataclysmEnabled?: boolean;
   colors?: Array<[number, number, number]>;
   mapRevision?: number;
   width: number;
@@ -731,6 +739,7 @@ export class WorldEngine {
   history: TurnRecord[] = [];
   private defeats: number[];
   private undoStack: Undo[] = [];
+  private cataclysmEnabled = false;
   private rowWeight = new Float32Array(MAP_H);
   private readonly elevation: Uint16Array<ArrayBufferLike>;
   private readonly admin1At: Int16Array<ArrayBufferLike>;
@@ -2868,6 +2877,10 @@ export class WorldEngine {
     return null;
   }
   getCountryKm2(id: number) { return (this.stats()[id]?.weight ?? 0) * this.km2PerWeight; }
+  getLandRatio() { return this.ecologicalLandRatio(this.stats()); }
+  isCataclysmEnabled() { return this.cataclysmEnabled; }
+  setCataclysm(enabled: boolean) { this.cataclysmEnabled = enabled; }
+
   getCountryInitialKm2(id: number) { return (this.countries[id]?.initialWeight ?? 0) * this.km2PerWeight; }
   getCountryShare(id: number) {
     const current = this.stats()[id]?.weight ?? 0;
@@ -3880,7 +3893,8 @@ export class WorldEngine {
         // kilometres of distance. The old unbounded elevation bonus made a
         // thin causeway race across open sea toward a distant shallow shelf.
         const terrainBonus = Math.max(-14, Math.min(14, (seabedAt(index) - seedSeabed) / 180));
-        return -terrainBonus + distance * contour - outward * 0.08
+        const drowned = this.initialOwners[index] >= 0 && this.owners[index] < 0 ? DROWNED_LAND_BONUS : 0;
+        return -terrainBonus - drowned + distance * contour - outward * 0.08
           + lateral * 0.025 + regionalNoise + noiseAt(x, y) * 1.5;
       };
       heapPush(frontier, { index: first, priority: 0 });
@@ -3905,8 +3919,35 @@ export class WorldEngine {
     }
   }
 
+  // Every CATACLYSM_EVERY_TURNS turns the sea takes a slice of every state at
+  // once. One direction is rolled for the whole world so a saved game replays
+  // the same random stream regardless of how many countries are still alive.
+  private runCataclysm(actor: Country, changed: Array<[number, number]>): TurnRecord | undefined {
+    if (this.gameMode !== "full" || !this.cataclysmEnabled) return undefined;
+    if (this.turn <= 0 || this.turn % CATACLYSM_EVERY_TURNS !== 0) return undefined;
+    const stats = this.stats(), direction = this.pick(DIRECTIONS);
+    const cataclysmChanged: Array<[number, number]> = [];
+    for (const country of this.countries) {
+      if (!this.isCountryPlayable(country.id) || (stats[country.id]?.cells ?? 0) <= 3) continue;
+      this.erodeLowlands(country.id, direction, stats[country.id].weight * CATACLYSM_FRACTION, stats, cataclysmChanged);
+    }
+    if (!cataclysmChanged.length) return undefined;
+    this.visualRevision++;
+    const weight = cataclysmChanged.reduce((sum, [index]) => sum + this.rowWeight[Math.floor(index / MAP_W)], 0);
+    const changedKm2 = weight * this.km2PerWeight;
+    changed.push(...cataclysmChanged);
+    return {
+      turn: this.turn, countryId: actor.id, countryName: actor.name, countryFlag: actor.flag,
+      action: "erosion", direction: direction.label, directionShort: direction.short,
+      size: "tiny", fraction: CATACLYSM_FRACTION, targetId: null, targetName: null, targetFlag: null,
+      changedKm2, actualFraction: CATACLYSM_FRACTION, eliminated: null, cataclysm: true,
+      text: `Kataklizm: morza zalewają niziny na całym świecie, ląd traci około ${formatNumber(changedKm2)} km²`,
+    };
+  }
+
   apply(plan: TurnPlan) {
     const before = this.stats(), actor = this.countries[plan.countryId], changed: Array<[number, number]> = [];
+    let bridgeTo: string | undefined;
     const actorColorBefore: [number, number, number] = [actor.color[0], actor.color[1], actor.color[2]];
     const warExhaustionBefore = this.gameMode === "war" ? [...this.warExhaustion] : undefined;
     const capitalStatesBefore = this.gameMode === "war" ? this.capitalStates.map((capital) => capital ? { ...capital } : null) : undefined;
@@ -3996,7 +4037,14 @@ export class WorldEngine {
         }
       }
     } else if (plan.action === "land") {
+      // A land roll that closes the last strait between two states is an event
+      // of its own: compare the political neighbourhood before and after.
+      const neighboursBefore = new Set(this.neighbouringCountries(actor.id));
       this.grow(this.coast(actor.id, plan.direction, before).map((item) => item.sea), -1, actor.id, goal, plan.direction, changed);
+      for (const id of this.neighbouringCountries(actor.id, changed)) {
+        if (neighboursBefore.has(id)) continue;
+        bridgeTo ??= this.countries[id]?.name;
+      }
     } else {
       this.erodeLowlands(actor.id, plan.direction, goal, before, changed);
     }
@@ -4047,19 +4095,22 @@ export class WorldEngine {
           ? `${actor.name} traci przez erozję tylko około ${formatNumber(changedKm2)} km² — zachowano minimalne terytorium państwa.`
           : `${actor.name} traci przez erozję około ${formatNumber(changedKm2)} km².`;
     if (capitalLost) text = `${text.replace(/\.$/, "")}, stolica ${capitalLost} upada`;
+    if (bridgeTo) text = `${text.replace(/\.$/, "")}, nowy ląd łączy je z ${bridgeTo}.`;
     const record: TurnRecord = {
       turn: this.turn, countryId: actor.id, countryName: actor.name, countryFlag: actor.flag,
       action: plan.action, direction: plan.direction.label, directionShort: plan.direction.short,
       size: plan.size, fraction: plan.fraction, targetId: target?.id ?? null,
       targetName: target?.name ?? null, targetFlag: target?.flag ?? null,
-      changedKm2, actualFraction, partial, eliminated, ...(capitalLost ? { capitalLost } : {}), ...(capitalRelocated ? { capitalRelocated } : {}), text,
+      changedKm2, actualFraction, partial, eliminated, ...(capitalLost ? { capitalLost } : {}), ...(capitalRelocated ? { capitalRelocated } : {}), ...(bridgeTo ? { bridgeTo } : {}), text,
     };
-    this.history = [...this.history, record].slice(-120);
+    const cataclysmRecord = this.runCataclysm(actor, changed);
+    this.history = [...this.history, record, ...(cataclysmRecord ? [cataclysmRecord] : [])].slice(-120);
     this.undoStack = [...this.undoStack, {
       rngBefore: plan.rngBefore, changed, color: actorColorBefore, countryId: actor.id, defeatedId: eliminated && target ? target.id : null,
+      ...(cataclysmRecord ? { historyEntries: 2 } : {}),
       ...(warExhaustionBefore ? { warExhaustion: warExhaustionBefore } : {}), ...(capitalStatesBefore ? { capitalStates: capitalStatesBefore } : {}), ...(warMinShareBefore ? { warMinShare: warMinShareBefore } : {}),
     }].slice(-40);
-    return { record, changedIndices: changed.map(([index]) => index) };
+    return { record, changedIndices: changed.map(([index]) => index), ...(cataclysmRecord ? { cataclysmRecord } : {}) };
   }
 
   canUndo() { return this.undoStack.length > 0 && (this.gameMode !== "war" || this.warUndosLeft > 0); }
@@ -4077,10 +4128,10 @@ export class WorldEngine {
     if (undo.capitalStates) this.capitalStates = undo.capitalStates.map((capital) => capital ? { ...capital } : null);
     if (undo.warMinShare) this.warMinShare = [...undo.warMinShare];
     this.turn = Math.max(0, this.turn - 1);
-    this.history.pop();
+    for (let entry = 0; entry < (undo.historyEntries ?? 1); entry++) this.history.pop();
     return true;
   }
-  reset(seed = freshSeed(), mode: GameMode = this.gameMode, region: GameRegion = this.gameRegion, microstates: MicrostateRule = this.microstateRule) {
+  reset(seed = freshSeed(), mode: GameMode = this.gameMode, region: GameRegion = this.gameRegion, microstates: MicrostateRule = this.microstateRule, options?: { cataclysm?: boolean }) {
     this.owners.set(this.initialOwners);
     this.initialColors.forEach((color, id) => { this.countries[id].color = [color[0], color[1], color[2]]; });
     this.seed = seed || 1;
@@ -4089,6 +4140,7 @@ export class WorldEngine {
     this.gameRegion = region;
     this.microstateRule = microstates;
     this.playerCountryId = null;
+    this.cataclysmEnabled = options?.cataclysm ?? false;
     this.turn = 0;
     this.history = [];
     this.defeats.fill(0);
@@ -4143,6 +4195,7 @@ export class WorldEngine {
       warGuarantee: this.gameMode === "war" ? this.warGuarantee ? { ...this.warGuarantee } : null : undefined,
       warGuaranteeUsed: this.gameMode === "war" ? this.warGuaranteeUsed : undefined,
       warMinShare: this.gameMode === "war" ? [...this.warMinShare] : undefined,
+      cataclysmEnabled: this.cataclysmEnabled,
       colors: this.countries.map(({ color }) => [color[0], color[1], color[2]]),
       mapRevision: CURRENT_MAP_REVISION,
       width: MAP_W,
@@ -4204,7 +4257,7 @@ export class WorldEngine {
     }
     const nextHistory = snapshot.history.slice(-120).map((record) => ({ ...record }));
     this.owners.set(nextOwners);
-    this.seed = snapshot.seed; this.rngState = snapshot.rngState; this.gameMode = snapshot.mode ?? "full"; this.gameRegion = snapshot.region ?? "world"; this.microstateRule = snapshot.microstates ?? "all"; this.playerCountryId = snapshot.playerCountryId ?? null; this.turn = snapshot.turn;
+    this.seed = snapshot.seed; this.rngState = snapshot.rngState; this.gameMode = snapshot.mode ?? "full"; this.gameRegion = snapshot.region ?? "world"; this.microstateRule = snapshot.microstates ?? "all"; this.playerCountryId = snapshot.playerCountryId ?? null; this.cataclysmEnabled = snapshot.cataclysmEnabled ?? false; this.turn = snapshot.turn;
     if (this.gameMode === "strategy") {
       this.buildStrategicRegions();
       if (snapshot.playerCountryId !== undefined && snapshot.playerCountryId !== null && snapshot.playerCountryId >= this.countries.length) throw new Error("Zapis wskazuje nieistniejące państwo gracza.");
@@ -5042,6 +5095,7 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
   if (candidate.warMinShare !== undefined && (!Array.isArray(candidate.warMinShare)
     || countryCount === undefined || candidate.warMinShare.length !== countryCount
     || !candidate.warMinShare.every((value) => finite(value, 0)))) return false;
+  if (candidate.cataclysmEnabled !== undefined && typeof candidate.cataclysmEnabled !== "boolean") return false;
   if (candidate.playerCountryId !== undefined && candidate.playerCountryId !== null && !integer(candidate.playerCountryId, 0)) return false;
   if (candidate.strategicRegionSchema !== undefined && candidate.strategicRegionSchema !== 1 && candidate.strategicRegionSchema !== 2 && candidate.strategicRegionSchema !== 3 && candidate.strategicRegionSchema !== 4 && candidate.strategicRegionSchema !== 5) return false;
   if (candidate.strategicRegionOwners !== undefined && (!Array.isArray(candidate.strategicRegionOwners) || !candidate.strategicRegionOwners.every((id) => integer(id, 0)))) return false;
