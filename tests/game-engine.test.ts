@@ -2126,3 +2126,17 @@ test("war mode snaps a capital rasterized onto a neighbour back to its own count
   const { record } = engine.apply(plan!);
   assert.equal(record.capitalLost, undefined, "no capital falls in the opening turn without a real capture");
 });
+
+test("land ratio starts at one and drops after erosion", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 100; y <= 130; y++) for (let x = 100; x <= 130; x++) owners[indexAt(x, y)] = 0;
+  const engine = engineFrom(owners);
+  assert.ok(Math.abs(engine.getLandRatio() - 1) < 1e-9, "a freshly built world holds exactly the starting land");
+  const north = DIRECTIONS.find((direction) => direction.short === "N") as Direction;
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "erosion", direction: north,
+    directionAttempts: [north], actionWasRerolled: false, size: "medium", fraction: .2, targetId: null,
+  });
+  assert.ok(engine.getLandRatio() < .95, `erosion must lower the ratio, got ${engine.getLandRatio()}`);
+});
