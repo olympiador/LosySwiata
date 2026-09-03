@@ -275,3 +275,22 @@
 .cataclysm-picker span{display:flex;min-width:0;flex-direction:column;gap:3px}
 .cataclysm-picker b{color:var(--ink);font-size:9px;text-transform:uppercase}
 .cataclysm-picker small{color:var(--muted2);font-size:8px;line-height:1.4}
+
+/* Decyzje mają być kartami do czytania i świadomego wyboru, nie ścianą tekstu. */
+.policy-card,.policy-dossier{gap:10px;padding:12px;border-color:rgba(242,201,111,.3);background:linear-gradient(145deg,rgba(242,201,111,.09),rgba(8,27,36,.55))}
+.policy-card>header,.policy-dossier>header{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;padding:3px 1px 10px;border-bottom:1px solid rgba(242,201,111,.2);color:var(--gold);font-size:9px;letter-spacing:.1em}
+.policy-card>header>span,.policy-dossier>header>span{display:flex;align-items:center;gap:5px;color:#aebfc4;font-size:7px;font-weight:700;letter-spacing:.04em;text-transform:none}
+.policy-points{display:inline-grid;min-width:22px;min-height:22px;place-items:center;padding:0 6px;border:1px solid rgba(126,207,194,.42);border-radius:99px;background:rgba(98,195,182,.12);color:#b9fff3!important;font:850 11px ui-monospace,monospace}
+.policy-card .policy-list,.policy-dossier .policy-list{gap:8px}
+.policy-card .policy-item,.policy-dossier .policy-item{grid-template-columns:minmax(0,1fr) minmax(88px,auto);align-items:end;gap:8px;padding:9px;border-color:rgba(154,197,213,.18);border-radius:8px;background:rgba(3,17,25,.43);box-shadow:inset 3px 0 0 rgba(242,201,111,.25)}
+.policy-card .policy-item>div,.policy-dossier .policy-item>div{display:grid;gap:4px;min-width:0}
+.policy-card .policy-item small:first-child,.policy-dossier .policy-item small:first-child{color:#edf5f3;font-size:9px;font-weight:850;letter-spacing:.025em}
+.policy-card .policy-item b,.policy-dossier .policy-item b{width:max-content;max-width:100%;padding:2px 5px;border-radius:4px;background:rgba(242,201,111,.1);color:#f2d98d;font:700 7px ui-monospace,monospace}
+.policy-card .policy-item small:last-child,.policy-dossier .policy-item small:last-child{color:#9ab0b7;font-size:7px;line-height:1.5}
+.policy-card .policy-item button,.policy-dossier .policy-item button,.policy-card .policy-item select,.policy-dossier .policy-item select{width:100%;min-height:36px;margin:0;font-size:7px}
+.policy-card footer,.policy-dossier footer{padding-top:8px;border-top:1px solid rgba(154,197,213,.15);color:#8aaab5;font-size:7px;line-height:1.45}
+.war-refugee-destinations{display:grid;gap:5px;padding:9px;border:1px solid rgba(98,195,182,.24);border-radius:8px;background:rgba(98,195,182,.055)}
+.war-refugee-destinations>span{color:#9edfd3;font-size:8px;font-weight:850;letter-spacing:.09em}
+.war-refugee-destinations>div{display:flex;justify-content:space-between;gap:10px;padding-top:4px;border-top:1px solid rgba(255,255,255,.08)}
+.war-refugee-destinations small{color:#d7e7e7;font-size:8px}.war-refugee-destinations b{color:#9ff0dc;font:800 9px ui-monospace,monospace}
+@media(max-width:440px){.policy-card .policy-item,.policy-dossier .policy-item{grid-template-columns:1fr}.policy-card .policy-item button,.policy-dossier .policy-item button{justify-self:stretch}}

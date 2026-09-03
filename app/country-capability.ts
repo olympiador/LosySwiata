@@ -1,4 +1,5 @@
 import type { Country, StrategicRegion } from "./game-engine";
+import { STRATEGIC_BASELINES } from "./strategic-baselines";
 
 export type StrategicComponents = { economy: number; population: number; technology: number; logistics: number; military: number; stability: number };
 
@@ -204,6 +205,13 @@ function cloneCapabilityState(state: CountryCapabilityState): CountryCapabilityS
 export function initialCapabilityStates(countries: Country[]): CountryCapabilityState[] {
   return countries.map((country) => {
     const calibrated = MANUAL_BASELINES[country.iso3 as keyof typeof MANUAL_BASELINES];
+    const reportedPopulation = STRATEGIC_BASELINES[country.iso3 ?? ""]?.population;
+    // Czasem źródłowy rekord jest agregatem regionalnym. Dla państwa bierzemy
+    // tylko wiarygodną, pojedynczą populację. Wzór awaryjny zostaje wyłącznie
+    // dla terytoriów, których nie ma w bazie.
+    const baselinePopulation = Number.isFinite(reportedPopulation) && reportedPopulation! >= 10_000 && reportedPopulation! <= 1_500_000_000
+      ? reportedPopulation!
+      : undefined;
     const fallback = {
       economy: 20 + ((country.id * 137.508) % 40),
       population: 20 + ((country.id * 251.17) % 35),
@@ -217,7 +225,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       : { ...fallback, stability: clamp(fallback.stability) }) };
     const regimeType = calibrated?.regimeType ?? initialRegimeType(country.id);
     const informationEnvironment = calibrated?.informationEnvironment ?? initialInformationEnvironment(country.id);
-    let populationAbsolute = calibrated?.populationAbsolute ?? components.population * 1_000_000;
+    let populationAbsolute = calibrated?.populationAbsolute ?? baselinePopulation ?? components.population * 1_000_000;
     if (!calibrated && components.population > 45) {
       const fallbackPop = 1_000_000 + ((country.id * 251.17) % 35) * 1_000_000;
       components.population = clamp(fallbackPop / 1_000_000, 0, 45);

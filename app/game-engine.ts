@@ -130,8 +130,14 @@ export type StrategicCampaign = {
   refugeesFledWomen?: number;
   refugeesFledMen?: number;
   refugeesFledChildren?: number;
+  refugeeDestinations?: StrategicRefugeeDestination[];
   lastMomentum?: number;
   lastRandomFactor?: number;
+};
+
+export type StrategicRefugeeDestination = {
+  countryId: number;
+  people: number;
 };
 
 export type StrategicOccupation = {
@@ -170,6 +176,7 @@ export type StrategicWarHistoryEntry = {
   refugeesFledWomen: number;
   refugeesFledMen: number;
   refugeesFledChildren: number;
+  refugeeDestinations: StrategicRefugeeDestination[];
 };
 
 type StrategicCapitalLocation = { regionId: number; x: number; y: number; name: string; relocated: boolean };
@@ -2050,7 +2057,7 @@ export class WorldEngine {
     const region = this.strategicRegions[regionId];
     if (!region || region.ownerId === attackerId || !this.getStrategicTargets(attackerId).some(({ id }) => id === regionId)) return null;
     if (this.strategicCampaigns.some((campaign) => campaign.attackerId === attackerId)) return null;
-    const campaign: StrategicCampaign = { id: this.nextCampaignId++, attackerId, defenderId: region.ownerId, regionId, progress: 6 + this.random() * 9, turns: 0, attackerCasualties: 0, defenderCasualties: 0, battles: 0, refugeesFled: 0, refugeesFledWomen: 0, refugeesFledMen: 0, refugeesFledChildren: 0 };
+    const campaign: StrategicCampaign = { id: this.nextCampaignId++, attackerId, defenderId: region.ownerId, regionId, progress: 6 + this.random() * 9, turns: 0, attackerCasualties: 0, defenderCasualties: 0, battles: 0, refugeesFled: 0, refugeesFledWomen: 0, refugeesFledMen: 0, refugeesFledChildren: 0, refugeeDestinations: [] };
     this.strategicCampaigns.push(campaign);
     return campaign;
   }
@@ -2117,6 +2124,7 @@ export class WorldEngine {
       refugeesFledWomen: campaign.refugeesFledWomen ?? 0,
       refugeesFledMen: campaign.refugeesFledMen ?? 0,
       refugeesFledChildren: campaign.refugeesFledChildren ?? 0,
+      refugeeDestinations: (campaign.refugeeDestinations ?? []).map((destination) => ({ ...destination })),
     };
     this.strategicWarHistory = [...this.strategicWarHistory, war].slice(-1_000);
     completedWars.push(war);
@@ -2548,34 +2556,30 @@ export class WorldEngine {
       }).filter(({ score }) => score > 0);
       const totalWeight = weighted.reduce((sum, { score }) => sum + score, 0);
       if (!totalWeight) continue;
-      let moved = 0;
-      const shares = weighted.map(({ id, score }) => ({ id, amount: Math.floor(requested * score / totalWeight) }));
-      for (const share of shares) moved += share.amount;
-      // Błędy zaokrągleń kierujemy do najlepiej przygotowanego sąsiada.
-      const best = [...weighted].sort((a, b) => b.score - a.score)[0];
-      if (best) shares.find(({ id }) => id === best.id)!.amount += requested - moved;
       const profile = refugeeArrivalProfile(source.manpower.mobilization);
-      for (const { id, amount } of shares) {
-        incoming[id] += amount;
-        incomingWomen[id] += amount * profile.women;
-        incomingMen[id] += amount * profile.men;
-        incomingChildren[id] += amount * profile.children;
-      }
-      let allocated = 0;
-      for (const campaign of fronts) {
-        const amount = Math.floor(requested / fronts.length);
-        allocated += amount;
+      const best = [...weighted].sort((a, b) => b.score - a.score)[0];
+      const campaignAmounts = fronts.map((_, index) => Math.floor(requested / fronts.length));
+      campaignAmounts[0] += requested - campaignAmounts.reduce((sum, amount) => sum + amount, 0);
+      for (const [index, campaign] of fronts.entries()) {
+        const amount = campaignAmounts[index];
         campaign.refugeesFled = (campaign.refugeesFled ?? 0) + amount;
         campaign.refugeesFledWomen = (campaign.refugeesFledWomen ?? 0) + Math.round(amount * profile.women);
         campaign.refugeesFledMen = (campaign.refugeesFledMen ?? 0) + Math.round(amount * profile.men);
         campaign.refugeesFledChildren = (campaign.refugeesFledChildren ?? 0) + amount - Math.round(amount * profile.women) - Math.round(amount * profile.men);
-      }
-      if (allocated < requested && fronts[0]) {
-        const amount = requested - allocated;
-        fronts[0].refugeesFled = (fronts[0].refugeesFled ?? 0) + amount;
-        fronts[0].refugeesFledWomen = (fronts[0].refugeesFledWomen ?? 0) + Math.round(amount * profile.women);
-        fronts[0].refugeesFledMen = (fronts[0].refugeesFledMen ?? 0) + Math.round(amount * profile.men);
-        fronts[0].refugeesFledChildren = (fronts[0].refugeesFledChildren ?? 0) + amount - Math.round(amount * profile.women) - Math.round(amount * profile.men);
+        let moved = 0;
+        const destinations = weighted.map(({ id, score }) => ({ id, amount: Math.floor(amount * score / totalWeight) }));
+        for (const destination of destinations) moved += destination.amount;
+        if (best) destinations.find(({ id }) => id === best.id)!.amount += amount - moved;
+        for (const destination of destinations) {
+          if (!destination.amount) continue;
+          incoming[destination.id] += destination.amount;
+          incomingWomen[destination.id] += destination.amount * profile.women;
+          incomingMen[destination.id] += destination.amount * profile.men;
+          incomingChildren[destination.id] += destination.amount * profile.children;
+          const known = campaign.refugeeDestinations?.find(({ countryId }) => countryId === destination.id);
+          if (known) known.people += destination.amount;
+          else (campaign.refugeeDestinations ??= []).push({ countryId: destination.id, people: destination.amount });
+        }
       }
       outgoing[sourceId] += requested;
     }
@@ -4302,6 +4306,7 @@ export class WorldEngine {
         refugeesFledWomen: war.refugeesFledWomen ?? 0,
         refugeesFledMen: war.refugeesFledMen ?? 0,
         refugeesFledChildren: war.refugeesFledChildren ?? 0,
+        refugeeDestinations: war.refugeeDestinations?.map((destination) => ({ ...destination })) ?? [],
       })) ?? [];
       this.strategicPendingCasualties = this.countries.map(() => 0);
       this.strategicOccupations = snapshot.strategicRegionSchema === 5 && snapshot.strategicOccupations

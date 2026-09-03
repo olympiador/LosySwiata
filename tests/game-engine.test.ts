@@ -83,6 +83,11 @@ test("initial demographic pyramids differ by country development", () => {
   assert.ok(states[0].demographics.elderly > states[1].demographics.elderly);
 });
 
+test("country population starts from the real country baseline, not an id-derived placeholder", () => {
+  const [lithuania] = initialCapabilityStates([{ ...countries[0], iso: "LT", iso3: "LTU", name: "Litwa" }]);
+  assert.equal(lithuania.populationAbsolute, 2_808_380);
+});
+
 test("refugee transfers change the sending and receiving populations without inventing residents", () => {
   const state = initialCapabilityStates([{ ...countries[0], iso: "PL", iso3: "POL" }])[0];
   const moved = applyRefugeeMovement(state, 12_000, 3_500, refugeeArrivalProfile("full"));
