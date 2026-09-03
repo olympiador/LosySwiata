@@ -522,6 +522,14 @@ export function loadCapabilityStatesFromSnapshot(countries: Country[], entries: 
     // Zapisy sprzed dodania ustroju mają 14 pól. Zachowują wszystkie
     // istniejące wartości, a brakujący ustrój odziedziczają z bazowego kraju.
     if (!entry || entry.length < 8 || !country) return fallback;
+    const savedPopulation = clamp(entry[11] ?? 0, 0, 2_000_000_000);
+    // Wersje sprzed tej poprawki wpisywały dla części państw pseudolosową
+    // populację zależną od ich id. Naprawiamy tylko ewidentnie nierealny
+    // odczyt, aby nie skasować rzeczywistych skutków wojny w zapisanej grze.
+    const populationAbsolute = fallback.populationAbsolute > 0
+      && (savedPopulation > fallback.populationAbsolute * 4 || savedPopulation < fallback.populationAbsolute * .25)
+      ? fallback.populationAbsolute
+      : savedPopulation;
     return {
       components: { economy: clamp(entry[0] ?? 0), population: clamp(entry[1] ?? 0), technology: clamp(entry[2] ?? 0), logistics: clamp(entry[3] ?? 0), military: clamp(entry[4] ?? 0), stability: clamp(entry[5] ?? 0) },
       uncertainty: 0.18,
@@ -541,7 +549,7 @@ export function loadCapabilityStatesFromSnapshot(countries: Country[], entries: 
       assimilationProgress: clamp(entry[12] ?? 0, 0, 100),
       refugeesHosted: clamp(entry[13] ?? 0, 0, 500_000_000),
       refugeeComposition: { women: clamp(entry[15] ?? 0, 0, 500_000_000), men: clamp(entry[16] ?? 0, 0, 500_000_000), children: clamp(entry[17] ?? 0, 0, 500_000_000) },
-      populationAbsolute: clamp(entry[11] ?? 0, 0, 2_000_000_000),
+      populationAbsolute,
     };
   });
 }
