@@ -1610,8 +1610,16 @@ export class WorldEngine {
       const isLarge = region.areaKm2 > 20_000;
       region.portCount = portsByRegion[region.id];
       region.maritimeAccess = isCoastal ? Math.max(12, Math.min(100, region.portCount * 25)) : 0;
-      region.railDensity = isLarge ? 0.7 : 0.35;
-      region.roadDensity = 0.5;
+      // Nie mamy globalnego, licencjonowanego wykazu dróg per prowincja.
+      // Zamiast udawać realne kilometry, modelujemy dostępność regionalną
+      // na bazie krajowego LPI Banku Światowego, rozmiaru sektora oraz
+      // rzeczywistych portów i lotnisk przypisanych współrzędnymi.
+      const countryLogistics = this.strategicBaseline(region.originalOwnerId).logistics;
+      const baselineAccess = Math.max(15, Math.min(92, 20 + (countryLogistics ?? 2.5) * 18));
+      const areaPenalty = Math.min(16, Math.max(0, Math.log10(Math.max(1, region.areaKm2 / 1_000)) * 5));
+      const transportNodes = Math.min(16, airportsByRegion[region.id] * 4 + portsByRegion[region.id] * 3 + (isCoastal ? 3 : 0));
+      region.roadDensity = Math.max(.12, Math.min(.96, (baselineAccess + transportNodes - areaPenalty) / 100));
+      region.railDensity = Math.max(.10, Math.min(.95, (baselineAccess * .92 + airportsByRegion[region.id] * 3 - areaPenalty * .7 + (isLarge ? 2 : -2)) / 100));
       region.airportCount = airportsByRegion[region.id];
       region.riverAccess = 0;
       region.logisticsIndex = Math.max(0, Math.min(100,
@@ -2391,7 +2399,6 @@ export class WorldEngine {
     const policies = Object.values(this.playerPolicyState.decisions);
     const now = this.turn;
     return policies.filter((policy) => {
-      if (this.playerPolicyState.decisionPoints < policy.cost) return false;
       if (policy.duration && policy.lastUsedTurn + policy.cooldown > now) return false;
       if (policy.condition && !policy.condition(state, this.strategicRegions)) return false;
       return true;
@@ -4149,7 +4156,7 @@ export class WorldEngine {
     this.capitalStates = this.initialWarCapitalStates();
     this.resetWarResources();
     this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, undefined);
-    this.playerPolicyState.decisionPoints = 0;
+    this.playerPolicyState.decisionPoints = mode === "strategy" ? 1 : 0;
     this.playerPolicyState.lastDecisionTurn = 0;
     this.playerPolicyState.activePolicies = [];
     this.playerPolicyState.decisions = createPlayerPolicyDecisionDefaults();

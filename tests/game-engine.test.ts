@@ -2258,3 +2258,19 @@ test("new land returns to drowned coastline before it invades open sea", () => {
   const withMemory = reclaimedShare(true), withoutMemory = reclaimedShare(false);
   assert.ok(withMemory > withoutMemory, `drowned land must come back first: ${withMemory} vs ${withoutMemory}`);
 });
+
+test("strategic player begins with a usable decision and sees policies beyond current points", () => {
+  const engine = engineFrom(twoBlockWorld());
+  engine.reset(20260903, "strategy", "world", "all");
+  engine.setPlayerCountry(0);
+
+  assert.equal(engine.getPlayerPolicyState().decisionPoints, 1, "a new strategic game must let the player make one opening decision");
+  const policies = engine.getAvailablePlayerPolicies(0);
+  assert.ok(policies.some(({ id }) => id === "modernize-roads"), "a basic regional infrastructure decision must be shown immediately");
+  assert.ok(policies.some(({ cost }) => cost === 2), "expensive decisions stay visible instead of making the panel look empty");
+
+  const region = engine.getStrategicRegions().find(({ ownerId }) => ownerId === 0)!;
+  assert.equal(engine.activateLogisticsPolicy("modernize-roads", region.id), true);
+  assert.equal(engine.getPlayerPolicyState().decisionPoints, 0);
+  assert.equal(engine.getCountryLogisticsInvestments(0)[0]?.type, "road");
+});

@@ -402,8 +402,9 @@ export function evaluateCapabilityChange(
   const maritimeBlockade = context.maritimeBlockade ?? 0;
   const countryLogistics = clamp(countryLogisticsBase + logisticsInvestmentBonus - maritimeBlockade * 18, 0, 100);
 
+  const policy = context.policyEffects ?? {};
   const change: StrategicComponents = {
-    economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty - maritimeBlockade * 0.12),
+    economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty - maritimeBlockade * 0.12 + (policy.economyDelta ?? 0)),
     population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty),
     technology: clamp((baseline.technology - state.components.technology) * 0.03 + (context.hasOutgoing ? -0.08 : 0.03) - sanctionsPenalty * 0.05),
     logistics: clamp((countryLogistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0)),
@@ -416,10 +417,9 @@ export function evaluateCapabilityChange(
   const foreignBasePenalty = clamp((context.foreignBasePressure ?? 0) * 5, 0, 10);
   const infoEnv = state.informationEnvironment;
   const infoEffect = infoEnv.score > 60 && regimeType === "democracy" ? -10 : infoEnv.score > 70 && regimeType !== "democracy" ? 5 : infoEnv.score > 75 && regimeType === "totalitarian" ? 8 : 0;
-  const stabilityComposite = state.components.stability + change.stability;
+  const stabilityComposite = state.components.stability + change.stability + (policy.stabilityDelta ?? 0);
   const stabilityFinal = clamp((stabilityComposite + infoEffect + foreignBasePenalty) * regimeMod, 0, 100);
 
-  const policy = context.policyEffects ?? {};
   const immigrationPolicy = policy.borderPolicy ?? state.borderPolicy;
   const immigrationEffects = computeImmigrationEffects(immigrationPolicy, state.components, regimeType);
   const informationEnvironment = {
@@ -478,13 +478,13 @@ export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, P
   return {
     "media-oversight": { id: "media-oversight", name: "Nadzór nad mediami", description: "Wzmocnienie kontroli nad platformami i nadawcami.", cost: 1, effects: { informationEnvironment: { mediaControl: 15 } }, costs: { stabilityDelta: -8 }, duration: 8, cooldown: 12, lastUsedTurn: -20, condition: (state) => state.informationEnvironment.mediaControl < 60 },
     "research-program": { id: "research-program", name: "Program badawczy", description: "Więcej dotacji na R&D, ale obciążenie budżetu.", cost: 2, effects: { technology: 3 }, costs: { economyDelta: -4 }, duration: 6, cooldown: 10, lastUsedTurn: -20, condition: (state) => state.components.economy > 50 },
-    "full-mobilization": { id: "full-mobilization", name: "Pełna mobilizacja", description: "Ogólna mobilizacja zwiększa siłę roboczą, ale wyczerpuje społeczeństwo.", cost: 1, effects: { manpower: { mobilization: "full" as const } }, costs: { stabilityDelta: -10, economyDelta: -3 }, duration: 12, cooldown: 20, lastUsedTurn: -20, condition: (state) => false },
+    "full-mobilization": { id: "full-mobilization", name: "Pełna mobilizacja", description: "Ogólna mobilizacja zwiększa gotowość obronną, ale obciąża gospodarkę i społeczeństwo.", cost: 1, effects: { manpower: { mobilization: "full" as const } }, costs: { stabilityDelta: -10, economyDelta: -3 }, duration: 12, cooldown: 20, lastUsedTurn: -20, condition: (state) => state.manpower.mobilization !== "full" },
     "open-borders": { id: "open-borders", name: "Otwarte granice", description: "Luźna polityka imigracyjna. Przyciąga siłę roboczą, ale powoduje napięcia społeczne.", cost: 1, effects: { immigrationPolicy: "open" }, costs: { stabilityDelta: -3 }, duration: 10, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.technology > 40 },
-    "close-borders": { id: "close-borders", name: "Zamknięcie granic", description: "Zamknięcie granic. Zwiększa kontrolę, ale ogranicza dostęp do pracy.", cost: 1, effects: { immigrationPolicy: "closed" }, costs: { stabilityDelta: -2 }, duration: 8, cooldown: 10, lastUsedTurn: -20, condition: (state) => false },
+    "close-borders": { id: "close-borders", name: "Zamknięcie granic", description: "Zwiększa kontrolę nad przepływem ludzi, ale ogranicza dopływ rąk do pracy.", cost: 1, effects: { immigrationPolicy: "closed" }, costs: { stabilityDelta: -2 }, duration: 8, cooldown: 10, lastUsedTurn: -20, condition: (state) => state.borderPolicy !== "closed" },
     "propaganda-offensive": { id: "propaganda-offensive", name: "Ofensywa propagandowa", description: "Kampania propagandowa. Wzmacnia kontrolę informacyjną, ale kosztuje.", cost: 2, effects: { informationEnvironment: { mediaControl: 8, servicesStrength: 5 } }, costs: { economyDelta: -5, stabilityDelta: -2 }, duration: 5, cooldown: 16, lastUsedTurn: -20, condition: (state) => (state.informationEnvironment.mediaControl > 30 || state.informationEnvironment.servicesStrength > 30) },
-    "diplomatic-pressure": { id: "diplomatic-pressure", name: "Presja dyplomatyczna na NATO", description: "Presja dyplomatyczna. Zmniejsza obecność baz obcych przy granicy.", cost: 2, effects: {}, costs: { economyDelta: -3 }, duration: 6, cooldown: 20, lastUsedTurn: -20, condition: (state) => false },
+    "diplomatic-pressure": { id: "diplomatic-pressure", name: "Presja dyplomatyczna", description: "Kosztowna kampania nacisku na sąsiadów. Wzmacnia odporność państwa na presję zewnętrzną.", cost: 2, effects: { stabilityDelta: 3 }, costs: { economyDelta: -3 }, duration: 6, cooldown: 20, lastUsedTurn: -20, condition: (state) => state.components.stability < 70 },
     "selective-immigration": { id: "selective-immigration", name: "Imigracja selektywna", description: "Selektywna polityka imigracyjna. Przyciąka wykwalifikowanych pracowników.", cost: 1, effects: { immigrationPolicy: "selective" }, costs: { stabilityDelta: -1 }, duration: 10, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.technology > 40 },
-    "mass-immigration-former-colonies": { id: "mass-immigration-former-colonies", name: "Imigracja masowa z byłych kolonii", description: "Masowy napływ z byłych kolonii i sąsiedztwa. Wzrost populacji, ale koszty społeczne.", cost: 2, effects: { immigrationPolicy: "mass" }, costs: { stabilityDelta: -6, economyDelta: -2 }, duration: 12, cooldown: 20, lastUsedTurn: -20, condition: (state) => false },
+    "mass-immigration-former-colonies": { id: "mass-immigration-former-colonies", name: "Program masowej migracji", description: "Przyspiesza napływ ludności kosztem spójności społecznej i budżetu.", cost: 2, effects: { immigrationPolicy: "mass" }, costs: { stabilityDelta: -6, economyDelta: -2 }, duration: 12, cooldown: 20, lastUsedTurn: -20, condition: (state) => state.components.technology > 35 && state.borderPolicy !== "mass" },
     "build-port": { id: "build-port", name: "Budowa portu", description: "Nowy port w regionie przybrzeżnym. Podnosi logistykę o +20.", cost: 2, effects: {}, costs: { economyDelta: -5 }, duration: 8, cooldown: 20, lastUsedTurn: -20, condition: (_state, regions) => regions?.some((r) => r.maritimeAccess > 0) ?? false },
     "modernize-roads": { id: "modernize-roads", name: "Modernizacja dróg", description: "Ulepszenie sieci drogowej. Podnosi logistykę o +10.", cost: 1, effects: {}, costs: { economyDelta: -3 }, duration: 4, cooldown: 12, lastUsedTurn: -20, condition: () => true },
     "expand-airport": { id: "expand-airport", name: "Rozbudowa lotniska", description: "Nowe lotnisko w regionie. Podnosi logistykę o +12.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.economy > 30 },
@@ -558,14 +558,19 @@ export function demographicLabel(type: DemographicType): string {
 export function getActivePlayerPolicyEffects(state: PlayerPolicyState): any {
   const effects: any = {};
   for (const policy of state.activePolicies) {
-    if (policy.effects.informationEnvironment?.mediaControl) effects.mediaControlChange = (effects.mediaControlChange ?? 0) + policy.effects.informationEnvironment.mediaControl;
-    if (policy.effects.informationEnvironment?.servicesStrength) effects.servicesStrengthChange = (effects.servicesStrengthChange ?? 0) + policy.effects.informationEnvironment.servicesStrength;
-    if (policy.effects.technologyBurst) effects.technologyBurst = (effects.technologyBurst ?? 0) + policy.effects.technologyBurst;
+    const perQuarter = Math.max(1, policy.duration);
+    if (policy.effects.informationEnvironment?.mediaControl) effects.informationEnvironment = { ...effects.informationEnvironment, mediaControl: (effects.informationEnvironment?.mediaControl ?? 0) + policy.effects.informationEnvironment.mediaControl / perQuarter };
+    if (policy.effects.informationEnvironment?.servicesStrength) effects.informationEnvironment = { ...effects.informationEnvironment, servicesStrength: (effects.informationEnvironment?.servicesStrength ?? 0) + policy.effects.informationEnvironment.servicesStrength / perQuarter };
+    if (policy.effects.technology) effects.technologyBurst = (effects.technologyBurst ?? 0) + policy.effects.technology / perQuarter;
     if (policy.effects.stabilityDelta) effects.stabilityDelta = (effects.stabilityDelta ?? 0) + policy.effects.stabilityDelta;
     if (policy.effects.combatExperienceChange) effects.combatExperienceChange = (effects.combatExperienceChange ?? 0) + policy.effects.combatExperienceChange;
-    if (policy.effects.immigrationPolicy) effects.immigrationPolicy = policy.effects.immigrationPolicy;
-    if (policy.effects.manpower?.mobilization) effects.manpowerMobilization = policy.effects.manpower.mobilization;
+    if (policy.effects.immigrationPolicy) effects.borderPolicy = policy.effects.immigrationPolicy;
+    if (policy.effects.manpower?.mobilization) effects.manpower = { ...effects.manpower, mobilization: policy.effects.manpower.mobilization };
     if (policy.effects.logisticsInvestment) effects.logisticsInvestment = policy.effects.logisticsInvestment;
+    const economyCost = policy.costs.economyDelta;
+    const stabilityCost = policy.costs.stabilityDelta;
+    if (typeof economyCost === "number") effects.economyDelta = (effects.economyDelta ?? 0) + economyCost / perQuarter;
+    if (typeof stabilityCost === "number") effects.stabilityDelta = (effects.stabilityDelta ?? 0) + stabilityCost / perQuarter;
   }
   return effects;
 }
