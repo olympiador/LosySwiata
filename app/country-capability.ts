@@ -226,7 +226,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
     const regimeType = calibrated?.regimeType ?? initialRegimeType(country.id);
     const informationEnvironment = calibrated?.informationEnvironment ?? initialInformationEnvironment(country.id);
     let populationAbsolute = calibrated?.populationAbsolute ?? baselinePopulation ?? components.population * 1_000_000;
-    if (!calibrated && components.population > 45) {
+    if (!calibrated && baselinePopulation === undefined && components.population > 45) {
       const fallbackPop = 1_000_000 + ((country.id * 251.17) % 35) * 1_000_000;
       components.population = clamp(fallbackPop / 1_000_000, 0, 45);
       populationAbsolute = components.population * 1_000_000;
@@ -406,18 +406,17 @@ export function evaluateCapabilityChange(
   const consumption = consumptionDrive(demographics);
   const cliff = demographicCliff(demographics);
   const countryLogisticsBase = context.countryId !== undefined && context.regions ? getCountryLogisticsFromRegions(context.regions, context.countryId) : baseline.logistics;
-  const logisticsInvestmentBonus = state.logisticsInvestments.reduce((sum, inv) => sum + inv.bonus, 0);
   const maritimeBlockade = context.maritimeBlockade ?? 0;
-  const countryLogistics = clamp(countryLogisticsBase + logisticsInvestmentBonus - maritimeBlockade * 18, 0, 100);
+  const countryLogistics = clamp(countryLogisticsBase - maritimeBlockade * 18, 0, 100);
 
   const policy = context.policyEffects ?? {};
   const change: StrategicComponents = {
-    economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty - maritimeBlockade * 0.12 + (policy.economyDelta ?? 0)),
-    population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty),
-    technology: clamp((baseline.technology - state.components.technology) * 0.03 + (context.hasOutgoing ? -0.08 : 0.03) - sanctionsPenalty * 0.05),
-    logistics: clamp((countryLogistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0)),
-    military: clamp((baseline.military - state.components.military) * 0.06 + (context.hasOutgoing ? 0.3 : -0.05) + (context.hasIncoming ? 0.1 : 0) + cliff.manpowerPenalty * 0.5),
-    stability: clamp((baseline.stability - state.components.stability) * 0.03 + (context.hasIncoming ? -0.3 : 0.05) + occupationLoad * 0.5 + warIntensity * -0.05 + cliff.stabilityPenalty + (state.assimilationProgress < 30 ? -0.01 : 0)),
+    economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty - maritimeBlockade * 0.12 + (policy.economyDelta ?? 0), -100, 100),
+    population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty, -100, 100),
+    technology: clamp((baseline.technology - state.components.technology) * 0.03 + (context.hasOutgoing ? -0.08 : 0.03) - sanctionsPenalty * 0.05, -100, 100),
+    logistics: clamp((countryLogistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0), -100, 100),
+    military: clamp((baseline.military - state.components.military) * 0.06 + (context.hasOutgoing ? 0.3 : -0.05) + (context.hasIncoming ? 0.1 : 0) + cliff.manpowerPenalty * 0.5, -100, 100),
+    stability: clamp((baseline.stability - state.components.stability) * 0.03 + (context.hasIncoming ? -0.3 : 0.05) + occupationLoad * 0.5 + warIntensity * -0.05 + cliff.stabilityPenalty + (state.assimilationProgress < 30 ? -0.01 : 0), -100, 100),
   };
 
   const regimeType = context.regimeOverride ?? state.regimeType;
@@ -493,10 +492,10 @@ export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, P
     "diplomatic-pressure": { id: "diplomatic-pressure", name: "Presja dyplomatyczna", description: "Kosztowna kampania nacisku na sąsiadów. Wzmacnia odporność państwa na presję zewnętrzną.", cost: 2, effects: { stabilityDelta: 3 }, costs: { economyDelta: -3 }, duration: 6, cooldown: 20, lastUsedTurn: -20, condition: (state) => state.components.stability < 70 },
     "selective-immigration": { id: "selective-immigration", name: "Imigracja selektywna", description: "Selektywna polityka imigracyjna. Przyciąka wykwalifikowanych pracowników.", cost: 1, effects: { immigrationPolicy: "selective" }, costs: { stabilityDelta: -1 }, duration: 10, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.technology > 40 },
     "mass-immigration-former-colonies": { id: "mass-immigration-former-colonies", name: "Program masowej migracji", description: "Przyspiesza napływ ludności kosztem spójności społecznej i budżetu.", cost: 2, effects: { immigrationPolicy: "mass" }, costs: { stabilityDelta: -6, economyDelta: -2 }, duration: 12, cooldown: 20, lastUsedTurn: -20, condition: (state) => state.components.technology > 35 && state.borderPolicy !== "mass" },
-    "build-port": { id: "build-port", name: "Budowa portu", description: "Nowy port w regionie przybrzeżnym. Podnosi logistykę o +20.", cost: 2, effects: {}, costs: { economyDelta: -5 }, duration: 8, cooldown: 20, lastUsedTurn: -20, condition: (_state, regions) => regions?.some((r) => r.maritimeAccess > 0) ?? false },
-    "modernize-roads": { id: "modernize-roads", name: "Modernizacja dróg", description: "Ulepszenie sieci drogowej. Podnosi logistykę o +10.", cost: 1, effects: {}, costs: { economyDelta: -3 }, duration: 4, cooldown: 12, lastUsedTurn: -20, condition: () => true },
-    "expand-airport": { id: "expand-airport", name: "Rozbudowa lotniska", description: "Nowe lotnisko w regionie. Podnosi logistykę o +12.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.economy > 30 },
-    "rail-upgrade": { id: "rail-upgrade", name: "Modernizacja kolei", description: "Ulepszenie infrastruktury kolejowej. Podnosi logistykę o +15.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.technology > 25 },
+    "build-port": { id: "build-port", name: "Budowa portu", description: "Po 8 kwartałach region zyskuje port i 20 pkt dostępu morskiego.", cost: 2, effects: {}, costs: { economyDelta: -5 }, duration: 8, cooldown: 20, lastUsedTurn: -20, condition: (_state, regions) => regions?.some((r) => r.maritimeAccess > 0) ?? false },
+    "modernize-roads": { id: "modernize-roads", name: "Modernizacja dróg", description: "Po 4 kwartałach dostępność dróg w regionie trwale rośnie o 10 pkt, do 100.", cost: 1, effects: {}, costs: { economyDelta: -3 }, duration: 4, cooldown: 12, lastUsedTurn: -20, condition: () => true },
+    "expand-airport": { id: "expand-airport", name: "Rozbudowa lotniska", description: "Po 6 kwartałach region zyskuje jedno lotnisko, które pozostaje po zakończeniu inwestycji.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.economy > 30 },
+    "rail-upgrade": { id: "rail-upgrade", name: "Modernizacja kolei", description: "Po 6 kwartałach dostępność kolei w regionie trwale rośnie o 15 pkt, do 100.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.technology > 25 },
     "fortify-sector": { id: "fortify-sector", name: "Przygotuj umocnienia", description: "Budowa trwałych umocnień w wybranym sektorze. Każda decyzja zwiększa jego obronę o 25 pkt.", cost: 2, effects: {}, costs: { economyDelta: -5 }, duration: 1, cooldown: 12, lastUsedTurn: -20, condition: () => true },
   };
 }
@@ -523,13 +522,9 @@ export function loadCapabilityStatesFromSnapshot(countries: Country[], entries: 
     // istniejące wartości, a brakujący ustrój odziedziczają z bazowego kraju.
     if (!entry || entry.length < 8 || !country) return fallback;
     const savedPopulation = clamp(entry[11] ?? 0, 0, 2_000_000_000);
-    // Wersje sprzed tej poprawki wpisywały dla części państw pseudolosową
-    // populację zależną od ich id. Naprawiamy tylko ewidentnie nierealny
-    // odczyt, aby nie skasować rzeczywistych skutków wojny w zapisanej grze.
-    const populationAbsolute = fallback.populationAbsolute > 0
-      && (savedPopulation > fallback.populationAbsolute * 4 || savedPopulation < fallback.populationAbsolute * .25)
-      ? fallback.populationAbsolute
-      : savedPopulation;
+    // Bez wersji pochodzenia nie można odróżnić błędnej bazy od skutków wojny.
+    // Odczyt zachowuje populację, również po bardzo dużych stratach.
+    const populationAbsolute = savedPopulation;
     return {
       components: { economy: clamp(entry[0] ?? 0), population: clamp(entry[1] ?? 0), technology: clamp(entry[2] ?? 0), logistics: clamp(entry[3] ?? 0), military: clamp(entry[4] ?? 0), stability: clamp(entry[5] ?? 0) },
       uncertainty: 0.18,
@@ -542,8 +537,8 @@ export function loadCapabilityStatesFromSnapshot(countries: Country[], entries: 
       combatExperience: clamp(entry[7] ?? 0, 0, 25),
       manpower: { available: clamp(entry[8] ?? 0, 0, 200), active: clamp(entry[9] ?? 0, 0, 100), reserves: clamp(entry[10] ?? 0, 0, 200), mobilization: "hidden", maintenanceCost: 0 },
       logisticsInvestments: [],
-      demographics: defaultPyramid(),
-      demographicType: "chimney",
+      demographics: fallback.demographics,
+      demographicType: fallback.demographicType,
       borderPolicy: "selective",
       culturalProximity: defaultProximity(),
       assimilationProgress: clamp(entry[12] ?? 0, 0, 100),

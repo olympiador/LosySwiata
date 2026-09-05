@@ -7,6 +7,8 @@ import { applyRefugeeMovement, evaluateCapabilityChange, initialCapabilityStates
 import { ADMIN1_DEFLATE_BASE64, ADMIN1_ISO, ADMIN1_NAMES } from "../app/admin1-data";
 import { REAL_AIRPORTS_DEFLATE_BASE64 } from "../app/airport-data";
 import { CAPITALS } from "../app/capital-data";
+import { STRATEGIC_BASELINES } from "../app/strategic-baselines";
+import { capabilityStateToSnapshotArray } from "../app/country-capability";
 
 Object.defineProperty(globalThis, "document", {
   configurable: true,
@@ -2278,4 +2280,128 @@ test("strategic player begins with a usable decision and sees policies beyond cu
   assert.equal(engine.activateLogisticsPolicy("modernize-roads", region.id), true);
   assert.equal(engine.getPlayerPolicyState().decisionPoints, 0);
   assert.equal(engine.getCountryLogisticsInvestments(0)[0]?.type, "road");
+});
+
+test("real population is independent of country ordering", () => {
+  for (const iso3 of ["LTU", "LVA", "CHN", "BRA", "IND"]) for (let id = 0; id < 250; id++) {
+    const state = initialCapabilityStates([{ ...countries[0], id, iso3 }])[0];
+    assert.equal(state.populationAbsolute, STRATEGIC_BASELINES[iso3].population, `${iso3}, id ${id}`);
+  }
+});
+
+test("loading preserves severe population losses and large refugee gains", () => {
+  const source = [{ ...countries[0], iso3: "POL" }];
+  for (const population of [0, 9_000_000, 180_000_000]) {
+    const state = initialCapabilityStates(source)[0];
+    state.populationAbsolute = population;
+    assert.equal(loadCapabilityStatesFromSnapshot(source, [capabilityStateToSnapshotArray(state)])[0].populationAbsolute, population);
+  }
+});
+
+test("full game save preserves demographics, decisions, investments and continuation", () => {
+  const engine = engineFrom(twoBlockWorld());
+  engine.reset(4, "strategy", "world", "all"); engine.setPlayerCountry(0);
+  const region = engine.getStrategicRegions().find((r) => r.ownerId === 0)!;
+  assert.ok(engine.activateLogisticsPolicy("modernize-roads", region.id));
+  const save = engine.snapshot();
+  const state = save.capabilityStatesV2![0];
+  state.populationAbsolute = 10;
+  state.borderPolicy = "closed"; state.manpower.mobilization = "full";
+  state.demographics = { children: .3, youth: .1, primeAge: .3, middleAge: .2, elderly: .08, veryOld: .02 };
+  const restored = engineFrom(twoBlockWorld()); restored.load(save);
+  assert.deepEqual(restored.snapshot().capabilityStatesV2, save.capabilityStatesV2);
+  assert.deepEqual(restored.snapshot().policyStateV2, save.policyStateV2);
+  engine.load(save);
+  engine.advanceStrategicRound(); restored.advanceStrategicRound();
+  assert.deepEqual(restored.snapshot(), engine.snapshot());
+  assert.equal(save.capabilityStatesV2![0].logisticsInvestments[0].remainingTurns, 4, "saved snapshot is detached");
+});
+
+test("negative resource changes and policy costs survive evaluation", () => {
+  const state = initialCapabilityStates(countries)[0];
+  const baseline = { ...state.components, economy: 0, technology: 0, military: 0 };
+  const context = { hasIncoming: true, hasOutgoing: true, activeOccupations: 2, areaShare: 1 };
+  const ordinary = evaluateCapabilityChange(state, baseline, context, 1, 1);
+  const costly = evaluateCapabilityChange(state, baseline, { ...context, policyEffects: { economyDelta: -4 } }, 1, 1);
+  assert.ok(ordinary.change.technology < 0);
+  assert.ok(ordinary.change.military < 0);
+  assert.ok(costly.components.economy < ordinary.components.economy);
+});
+
+test("changed national resources affect combat power after save load", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(2, "strategy", "world", "all");
+  const initial = engine.getStrategicStrength(0).power;
+  const save = engine.snapshot();
+  save.capabilityStatesV2![0].components.technology += 20;
+  engine.load(save);
+  assert.ok(engine.getStrategicStrength(0).power > initial);
+  save.capabilityStatesV2![0].components.technology -= 20;
+  save.capabilityStatesV2![0].populationAbsolute *= .5;
+  engine.load(save);
+  assert.ok(engine.getStrategicStrength(0).power < initial);
+});
+
+test("completed infrastructure remains in the region and in saved games", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(2, "strategy", "world", "all"); engine.setPlayerCountry(0);
+  const save = engine.snapshot();
+  const region = engine.getStrategicRegions().find((r) => r.ownerId === 0)!;
+  save.infrastructureV2![region.id] = { roadDensity: .2, railDensity: .2, airportCount: 0, portCount: 0, maritimeAccess: 10 };
+  save.capabilityStatesV2![0].logisticsInvestments = (["road", "rail", "airport", "port"] as const).map((type) => ({ id: type, type, regionId: region.id, bonus: 10, remainingTurns: 1 }));
+  engine.load(save);
+  engine.advanceStrategicRound();
+  const after = engine.snapshot();
+  assert.equal(after.infrastructureV2![region.id].airportCount, 1);
+  assert.equal(after.infrastructureV2![region.id].portCount, 1);
+  assert.ok(after.infrastructureV2![region.id].roadDensity > .2);
+  assert.ok(after.infrastructureV2![region.id].railDensity > .2);
+  assert.equal(after.capabilityStatesV2![0].logisticsInvestments.length, 0);
+  engine.load(after);
+  assert.deepEqual(engine.snapshot().infrastructureV2, after.infrastructureV2);
+});
+
+test("policies can be used again after cooldown and UI does not permanently disable used decisions", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(3, "strategy", "world", "all"); engine.setPlayerCountry(0);
+  engine.turn = 1;
+  assert.ok(engine.activatePlayerPolicy("media-oversight"));
+  engine.turn = 13; engine.getPlayerPolicyState().decisionPoints = 2;
+  assert.ok(engine.getAvailablePlayerPolicies(0).some((p) => p.id === "media-oversight"));
+  assert.ok(engine.activatePlayerPolicy("media-oversight"));
+  assert.ok(!readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8").includes("policy.lastUsedTurn > 0"));
+});
+
+test("road baselines distinguish country logistics without saturating all countries", () => {
+  const engine = engineFrom(twoBlockWorld(), undefined, [{ ...countries[0], iso3: "DEU" }, { ...countries[1], iso3: "AFG" }]);
+  engine.reset(1, "strategy", "world", "all");
+  const regions = engine.getStrategicRegions();
+  const good = regions.find((r) => r.ownerId === 0)!;
+  const poor = regions.find((r) => r.ownerId === 1)!;
+  assert.ok(good.roadDensity > poor.roadDensity);
+  assert.ok(poor.roadDensity < .9);
+});
+
+test("malformed full state is rejected before changing the world", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(1, "strategy", "world", "all");
+  const save = engine.snapshot();
+  const broken = structuredClone(save);
+  broken.capabilityStatesV2![0].populationAbsolute = NaN;
+  assert.equal(isSnapshot(broken), false);
+  assert.throws(() => engine.load(broken));
+  assert.deepEqual(engine.snapshot(), save);
+  const badPolicy = structuredClone(save); badPolicy.policyStateV2!.decisionPoints = -1;
+  assert.equal(isSnapshot(badPolicy), false);
+  const badRoad = structuredClone(save); badRoad.infrastructureV2![0].roadDensity = 5;
+  assert.equal(isSnapshot(badRoad), false);
+});
+
+test("a policy remains active for every declared quarter", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(1, "strategy", "world", "all"); engine.setPlayerCountry(0);
+  assert.ok(engine.activatePlayerPolicy("media-oversight"));
+  const policy = engine.getPlayerPolicyState().decisions["media-oversight"];
+  const internals = engine as unknown as { advancePlayerPolicies(): void };
+  for (let turn = 1; turn <= policy.duration; turn++) {
+    engine.turn = turn; internals.advancePlayerPolicies();
+    assert.ok(engine.getPlayerPolicyState().activePolicies.some((p) => p.id === policy.id));
+  }
+  engine.turn++; internals.advancePlayerPolicies();
+  assert.ok(!engine.getPlayerPolicyState().activePolicies.some((p) => p.id === policy.id));
 });

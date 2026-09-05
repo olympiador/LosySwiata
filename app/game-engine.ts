@@ -10,6 +10,7 @@ import { REAL_AIRPORTS_DEFLATE_BASE64 } from "./airport-data";
 import { REAL_PORTS_DEFLATE_BASE64 } from "./port-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
+import { initialCapabilityStates } from "./country-capability";
 import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, applyRefugeeMovement, refugeeArrivalProfile, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
 export type { PolicyDecisionId, PlayerPolicyDecision, PlayerPolicyState, BorderPolicy, RegionLogistics };
 
@@ -321,6 +322,9 @@ export type GameSnapshot = {
   history: TurnRecord[];
   defeats?: number[];
   countryCapabilityStates?: number[][];
+  capabilityStatesV2?: CountryCapabilityState[];
+  policyStateV2?: { decisionPoints: number; lastDecisionTurn: number; used: Array<{ id: PolicyDecisionId; turn: number }>; active: PolicyDecisionId[] };
+  infrastructureV2?: Array<{ roadDensity: number; railDensity: number; airportCount: number; portCount: number; maritimeAccess: number }>;
 };
 
 type CountryRow = {
@@ -1622,7 +1626,7 @@ export class WorldEngine {
       // na bazie krajowego LPI Banku Światowego, rozmiaru sektora oraz
       // rzeczywistych portów i lotnisk przypisanych współrzędnymi.
       const countryLogistics = this.strategicBaseline(region.originalOwnerId).logistics;
-      const baselineAccess = Math.max(15, Math.min(92, 20 + (countryLogistics ?? 2.5) * 18));
+      const baselineAccess = Math.max(15, Math.min(92, 20 + countryLogistics * .72));
       const areaPenalty = Math.min(16, Math.max(0, Math.log10(Math.max(1, region.areaKm2 / 1_000)) * 5));
       const transportNodes = Math.min(16, airportsByRegion[region.id] * 4 + portsByRegion[region.id] * 3 + (isCoastal ? 3 : 0));
       region.roadDensity = Math.max(.12, Math.min(.96, (baselineAccess + transportNodes - areaPenalty) / 100));
@@ -1858,7 +1862,7 @@ export class WorldEngine {
   private strategicComponents(countryId: number): StrategicComponents {
     const cached = this.strategicComponentCache.get(countryId);
     if (cached) return cached;
-    const baseline = this.strategicBaseline(countryId);
+    const baseline = this.currentStrategicResources(countryId);
     const originalAreas = new Float64Array(this.countries.length);
     // Keep the whole real country as the denominator even in a regional game.
     // Otherwise Kaliningrad would inherit 100% of Russia's national resources.
@@ -1866,7 +1870,7 @@ export class WorldEngine {
     let economy = 0, population = 0, military = 0;
     for (const region of this.strategicRegions) {
       if (region.ownerId !== countryId || !this.isStrategicRegionPlayable(region)) continue;
-      const source = this.strategicBaseline(region.originalOwnerId);
+      const source = this.currentStrategicResources(region.originalOwnerId);
       const share = region.areaKm2 / Math.max(1, originalAreas[region.originalOwnerId]);
       const occupation = region.originalOwnerId === countryId ? null : this.strategicOccupations.find((item) => item.regionId === region.id && item.ownerId === countryId);
       const integration = region.originalOwnerId === countryId ? 1 : (occupation?.progress ?? 25) / 100;
@@ -1888,6 +1892,19 @@ export class WorldEngine {
     const exhaustionFactor = 1 - Math.min(80, this.strategicExhaustion[countryId] ?? 0) * .0035;
     const result = Math.max(0, (resources + institutions) * exhaustionFactor);
     this.strategicPowerCache.set(countryId, result);
+    return result;
+  }
+
+  private currentStrategicResources(countryId: number): StrategicComponents {
+    const baseline = this.strategicBaseline(countryId);
+    const state = this.countryCapabilityStates[countryId];
+    if (!state) return baseline;
+    const initial = initialCapabilityStates([this.countries[countryId]])[0];
+    const result = { ...baseline };
+    for (const key of ["economy", "technology", "logistics", "military", "stability"] as const) {
+      result[key] = Math.max(0, Math.min(100, baseline[key] + state.components[key] - initial.components[key]));
+    }
+    result.population = Math.max(0, baseline.population * state.populationAbsolute / Math.max(1, initial.populationAbsolute));
     return result;
   }
 
@@ -2106,6 +2123,8 @@ export class WorldEngine {
       state.manpower.available = Math.max(0, state.manpower.available - Math.max(1, Math.round(casualties / 8_000)));
       this.strategicPendingCasualties[countryId] = 0;
     }
+    this.strategicComponentCache.clear();
+    this.strategicPowerCache.clear();
   }
 
   private finishStrategicWar(campaign: StrategicCampaign, outcome: StrategicWarHistoryEntry["outcome"], completedWars: StrategicWarHistoryEntry[]) {
@@ -2386,6 +2405,7 @@ export class WorldEngine {
     if (policy.duration && policy.lastUsedTurn + policy.cooldown > this.turn) return false;
     const region = this.strategicRegions.find((r) => r.id === regionId && r.ownerId === this.playerCountryId);
     if (!region) return false;
+    if (policyId === "build-port" && region.maritimeAccess <= 0) return false;
     if (policy.condition) {
       const state = this.countryCapabilityStates[this.playerCountryId];
       if (!state || !policy.condition(state, this.strategicRegions)) return false;
@@ -2464,12 +2484,19 @@ export class WorldEngine {
     }
     this.playerPolicyState.activePolicies = this.playerPolicyState.activePolicies.filter((policy) => {
       if (!policy.duration) return true;
-      return policy.lastUsedTurn + policy.duration > this.turn;
+      return policy.lastUsedTurn + policy.duration >= this.turn;
     });
     const state = this.countryCapabilityStates[this.playerCountryId];
     if (!state?.logisticsInvestments.length) return;
     state.logisticsInvestments = state.logisticsInvestments.filter((inv) => {
       if (inv.remainingTurns > 1) { inv.remainingTurns -= 1; return true; }
+      const region = this.strategicRegions[inv.regionId];
+      if (region) {
+        if (inv.type === "road") region.roadDensity = Math.min(1, region.roadDensity + inv.bonus / 100);
+        if (inv.type === "rail") region.railDensity = Math.min(1, region.railDensity + inv.bonus / 100);
+        if (inv.type === "airport") region.airportCount++;
+        if (inv.type === "port") { region.portCount++; region.maritimeAccess = Math.min(100, region.maritimeAccess + inv.bonus); }
+      }
       return false;
     });
   }
@@ -2518,6 +2545,8 @@ export class WorldEngine {
       };
       this.countryCapabilityStates[index] = evaluateCapabilityChange(state, baseline, contextWithPolicy, this.turn, this.seed);
     }
+    this.strategicComponentCache.clear();
+    this.strategicPowerCache.clear();
   }
 
   /**
@@ -4218,6 +4247,9 @@ export class WorldEngine {
       history: this.history.map((record) => ({ ...record })),
       defeats: [...this.defeats],
       countryCapabilityStates: this.countryCapabilityStates.map(capabilityStateToSnapshotArray),
+      capabilityStatesV2: structuredClone(this.countryCapabilityStates),
+      policyStateV2: { decisionPoints: this.playerPolicyState.decisionPoints, lastDecisionTurn: this.playerPolicyState.lastDecisionTurn, used: Object.values(this.playerPolicyState.decisions).map((p) => ({ id: p.id, turn: p.lastUsedTurn })), active: this.playerPolicyState.activePolicies.map((p) => p.id) },
+      infrastructureV2: this.strategicRegions.map(({ roadDensity, railDensity, airportCount, portCount, maritimeAccess }) => ({ roadDensity, railDensity, airportCount, portCount, maritimeAccess })),
     };
   }
 
@@ -4341,6 +4373,21 @@ export class WorldEngine {
     this.warMinShare = snapshot.warMinShare ? [...snapshot.warMinShare] : this.countries.map(({ id }) => this.getCountryShare(id));
     this.directionTargetCache.clear();
     this.countryCapabilityStates = loadCapabilityStatesFromSnapshot(this.countries, snapshot.countryCapabilityStates);
+    if (snapshot.capabilityStatesV2?.length === this.countries.length) this.countryCapabilityStates = structuredClone(snapshot.capabilityStatesV2);
+    this.playerPolicyState.decisions = createPlayerPolicyDecisionDefaults();
+    this.playerPolicyState.activePolicies = [];
+    this.playerPolicyState.decisionPoints = this.gameMode === "strategy" ? 1 : 0;
+    this.playerPolicyState.lastDecisionTurn = this.turn;
+    if (snapshot.policyStateV2) {
+      const saved = snapshot.policyStateV2;
+      this.playerPolicyState.decisionPoints = saved.decisionPoints;
+      this.playerPolicyState.lastDecisionTurn = saved.lastDecisionTurn;
+      for (const used of saved.used) if (this.playerPolicyState.decisions[used.id]) this.playerPolicyState.decisions[used.id].lastUsedTurn = used.turn;
+      this.playerPolicyState.activePolicies = saved.active.filter((id) => this.playerPolicyState.decisions[id]).map((id) => ({ ...this.playerPolicyState.decisions[id] }));
+    }
+    if (snapshot.infrastructureV2?.length === this.strategicRegions.length) snapshot.infrastructureV2.forEach((infra, id) => Object.assign(this.strategicRegions[id], infra));
+    this.strategicComponentCache.clear();
+    this.strategicPowerCache.clear();
     this.visualRevision++;
   }
 
@@ -5090,6 +5137,34 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
     : Array.isArray(candidate.defeats) ? candidate.defeats.length
       : Array.isArray(candidate.countryCapabilityStates) ? candidate.countryCapabilityStates.length
         : undefined;
+  if (candidate.capabilityStatesV2 !== undefined) {
+    const fields = ["economy", "population", "technology", "logistics", "military", "stability"] as const;
+    const groups = ["children", "youth", "primeAge", "middleAge", "elderly", "veryOld"] as const;
+    if (!Array.isArray(candidate.capabilityStatesV2) || candidate.capabilityStatesV2.length !== countryCount
+      || !candidate.capabilityStatesV2.every((s) => s && typeof s === "object"
+        && s.components && fields.every((k) => finite(s.components[k]))
+        && s.change && fields.every((k) => finite(s.change[k]))
+        && finite(s.populationAbsolute, 0) && finite(s.uncertainty) && integer(s.lastEvaluatedTurn)
+        && finite(s.assimilationProgress) && finite(s.refugeesHosted, 0) && finite(s.combatExperience)
+        && s.demographics && groups.every((k) => finite(s.demographics[k], 0, 1))
+        && ["healthy", "chimney", "inverted"].includes(s.demographicType)
+        && ["democracy", "authoritarian", "totalitarian"].includes(s.regimeType)
+        && ["closed", "selective", "open", "mass"].includes(s.borderPolicy)
+        && s.manpower && ["hidden", "open", "full"].includes(s.manpower.mobilization)
+        && [s.manpower.available, s.manpower.active, s.manpower.reserves, s.manpower.maintenanceCost].every((v) => finite(v))
+        && s.informationEnvironment && [s.informationEnvironment.score, s.informationEnvironment.techComponent, s.informationEnvironment.mediaControl, s.informationEnvironment.servicesStrength].every((v) => finite(v))
+        && s.refugeeComposition && [s.refugeeComposition.women, s.refugeeComposition.men, s.refugeeComposition.children].every((v) => finite(v, 0))
+        && s.culturalProximity && typeof s.culturalProximity === "object"
+        && Array.isArray(s.logisticsInvestments) && s.logisticsInvestments.every((inv) => inv && typeof inv.id === "string" && integer(inv.regionId) && ["road", "rail", "airport", "port"].includes(inv.type) && finite(inv.bonus, 0) && integer(inv.remainingTurns, 1)))) return false;
+  }
+  if (candidate.policyStateV2 !== undefined) {
+    const p = candidate.policyStateV2, defaults = createPlayerPolicyDecisionDefaults();
+    if (!p || !integer(p.decisionPoints, 0, 2) || !integer(p.lastDecisionTurn)
+      || !Array.isArray(p.used) || !p.used.every((u) => u && Object.hasOwn(defaults, u.id) && integer(u.turn, -20))
+      || !Array.isArray(p.active) || !p.active.every((id) => Object.hasOwn(defaults, id))) return false;
+  }
+  if (candidate.infrastructureV2 !== undefined && (!Array.isArray(candidate.infrastructureV2)
+    || !candidate.infrastructureV2.every((i) => i && finite(i.roadDensity, 0, 1) && finite(i.railDensity, 0, 1) && integer(i.airportCount) && integer(i.portCount) && finite(i.maritimeAccess, 0, 100)))) return false;
   if (candidate.warExhaustion !== undefined && (!Array.isArray(candidate.warExhaustion)
     || countryCount === undefined || candidate.warExhaustion.length !== countryCount
     || !candidate.warExhaustion.every((value) => finite(value, 0)))) return false;
