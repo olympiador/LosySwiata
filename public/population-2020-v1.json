@@ -1,0 +1,13 @@
+{
+  "dataset": "GHS-POP R2023A",
+  "epoch": 2020,
+  "width": 4320,
+  "height": 2160,
+  "encoding": "zlib-compressed little-endian float32, persons per cell, north to south",
+  "aggregation": "sum by source cell centre, WGS84, global extent [-180,-90,180,90]",
+  "source": "https://data.jrc.ec.europa.eu/dataset/2ff68a52-5b5b-4a22-8f40-c41da8332cfe",
+  "archive_sha256": "579fb7477b33d9be61e9562b170ea108a670b85ef6fe23b61a22d17200929636",
+  "payload_sha256": "c35053b06b52ed109d994f3be23a754d89440210fc19f29dbc20dc4f44a69dc5",
+  "world_population": 7840952928.285841,
+  "compressed_bytes": 4691173
+}

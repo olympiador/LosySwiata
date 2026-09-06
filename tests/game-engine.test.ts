@@ -11,6 +11,7 @@ import { STRATEGIC_BASELINES } from "../app/strategic-baselines";
 import { capabilityStateToSnapshotArray } from "../app/country-capability";
 import { AGE_GROUPS, advancePopulationQuarter, ageCounts, allocatePeople, census, populationTotal, removePeople, type PopulationCensus, type PopulationAccounting } from "../app/population-model";
 import type { StrategicCampaign, StrategicWarHistoryEntry } from "../app/game-engine";
+import { decodePopulationGrid, loadPopulationGrid, POPULATION_GRID_URL } from "../app/population-grid";
 
 Object.defineProperty(globalThis, "document", {
   configurable: true,
@@ -37,6 +38,7 @@ const EngineConstructor = WorldEngine as unknown as new (
   admin1At?: Int16Array,
   airports?: Uint16Array,
   ports?: Uint16Array,
+  populationGrid?: Float32Array,
 ) => WorldEngine;
 
 function engineFrom(owners: Int16Array, elevation?: Uint16Array, sourceCountries = countries, admin1At?: Int16Array) {
@@ -462,6 +464,98 @@ test("fallback strategic regions preserve real connected country shapes instead 
   const regions = engine.getStrategicRegions().filter(({ originalOwnerId }) => originalOwnerId === 0);
   assert.equal(regions.length, 2, "disconnected real land components remain sectors instead of being sliced into rectangles");
   assert.deepEqual([...regions.map(({ name }) => name)].sort(), ["Polska — region 1", "Polska — region 2"]);
+});
+
+test("initial regional population follows settlement counts rather than land area and preserves played saves", () => {
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  for (let y = 1000; y < 1005; y++) for (let x = 2000; x < 2008; x++) owners[indexAt(x, y)] = 0;
+  for (let y = 1000; y < 1004; y++) for (let x = 2024; x < 2027; x++) owners[indexAt(x, y)] = 0;
+  const population = new Float32Array(MAP_W * MAP_H);
+  population[indexAt(2001, 1001)] = 10;
+  population[indexAt(2025, 1001)] = 90;
+  const sourceCountries = [{ ...countries[0], iso: "PL", iso3: "POL" }];
+  const make = (grid?: Float32Array) => new EngineConstructor(sourceCountries.map((c) => ({ ...c })), owners.slice(), owners.slice(), 1, undefined, undefined, undefined, undefined, grid);
+  const engine = make(population); engine.reset(1, "strategy", "world", "all");
+  const regions = engine.getStrategicRegions().sort((a, b) => b.areaKm2 - a.areaKm2);
+  assert.equal(regions.length, 2);
+  assert.ok(Math.abs(engine.getRegionPopulation(regions[1].id) / engine.getCountryPopulationAbsolute(0) - .9) < .00001);
+  assert.equal(engine.getPopulationDistribution(0), "ghsl-2020");
+  assert.equal(regions.reduce((sum, r) => sum + engine.getRegionPopulation(r.id), 0), engine.getCountryPopulationAbsolute(0));
+  const old = make(); old.reset(1, "strategy", "world", "all"); old.advanceStrategicRound();
+  const save = old.snapshot(); delete save.populationDistributionV1;
+  engine.load(save);
+  assert.deepEqual(engine.snapshot().regionalPopulationV1, save.regionalPopulationV1, "never overwrite regional war/migration changes in played legacy saves");
+  assert.equal(engine.getPopulationDistribution(0), "area");
+  old.reset(1, "strategy", "world", "all");
+  engine.load(old.snapshot());
+  assert.equal(engine.getPopulationDistribution(0), "ghsl-2020", "unplayed saves can adopt the new initial distribution");
+  assert.ok(engine.getRegionPopulation(regions[1].id) > engine.getRegionPopulation(regions[0].id));
+  const restored = make(population); restored.load(engine.snapshot());
+  assert.deepEqual(restored.snapshot().regionalPopulationV1, engine.snapshot().regionalPopulationV1);
+});
+
+test("missing settlement data uses explicitly labelled fallback and malformed grids are rejected", () => {
+  assert.throws(() => decodePopulationGrid(new ArrayBuffer(4)));
+  const invalid = new Float32Array(MAP_W * MAP_H); invalid[7] = NaN;
+  assert.throws(() => decodePopulationGrid(invalid.buffer));
+  const engine = new EngineConstructor(countries.map((c) => ({ ...c })), twoBlockWorld(), twoBlockWorld(), 1, undefined, undefined, undefined, undefined, new Float32Array(MAP_W * MAP_H));
+  engine.reset(1, "strategy", "world", "all");
+  assert.equal(engine.getPopulationDistribution(0), "area");
+  assertRegionalTotals(engine);
+});
+
+test("bundled GHS-POP data places people in populated regions across continents", () => {
+  const compressed = readFileSync("public/population-2020-v1.bin");
+  const inflated = inflateSync(compressed);
+  const grid = decodePopulationGrid(inflated.buffer.slice(inflated.byteOffset, inflated.byteOffset + inflated.byteLength));
+  const total = grid.reduce((sum, n) => sum + n, 0);
+  assert.ok(total > 7e9 && total < 9e9);
+  const adminBytes = inflateSync(Buffer.from(ADMIN1_DEFLATE_BASE64, "base64"));
+  const admin = new Int16Array(adminBytes.buffer, adminBytes.byteOffset, adminBytes.byteLength / 2);
+  const sourceCountries = [
+    { ...countries[0], id: 0, iso: "PL", iso3: "POL", name: "Polska" },
+    { ...countries[0], id: 1, iso: "SR", iso3: "SUR", name: "Surinam" },
+    { ...countries[0], id: 2, iso: "EG", iso3: "EGY", name: "Egipt" },
+    { ...countries[0], id: 3, iso: "AU", iso3: "AUS", name: "Australia" },
+  ];
+  const byIso = new Map(sourceCountries.map((c) => [c.iso, c.id]));
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  for (let i = 0; i < owners.length; i++) if (admin[i] >= 0) owners[i] = byIso.get(ADMIN1_ISO[admin[i]]) ?? -1;
+  const engine = new EngineConstructor(sourceCountries, owners, owners.slice(), 1, undefined, admin, undefined, undefined, grid);
+  engine.reset(1, "strategy", "world", "all");
+  const regions = engine.getStrategicRegions();
+  for (const c of sourceCountries) {
+    assert.equal(engine.getPopulationDistribution(c.id), "ghsl-2020");
+    const own = regions.filter((r) => r.ownerId === c.id);
+    assert.equal(own.reduce((sum, r) => sum + engine.getRegionPopulation(r.id), 0), engine.getCountryPopulationAbsolute(c.id));
+    const densities = own.map((r) => engine.getRegionPopulation(r.id) / r.areaKm2);
+    assert.ok(Math.max(...densities) > Math.min(...densities) * 3, `${c.name} must not have uniform density`);
+  }
+  const mazowieckie = regions.find((r) => r.name === "województwo mazowieckie")!;
+  const slaskie = regions.find((r) => r.name === "województwo śląskie")!;
+  const warminsko = regions.find((r) => r.name === "województwo warmińsko-mazurskie")!;
+  assert.ok(engine.getRegionPopulation(mazowieckie.id) > 4_000_000);
+  assert.ok(engine.getRegionPopulation(slaskie.id) > engine.getRegionPopulation(warminsko.id) * 2);
+  const surinam = regions.filter((r) => r.ownerId === 1);
+  const capital = surinam.find((r) => r.provinceNames.some((name) => name.includes("Paramaribo")))!;
+  assert.ok(capital, JSON.stringify(surinam.map((r) => ({ name: r.name, provinces: r.provinceNames }))));
+  const largest = [...surinam].sort((a, b) => b.areaKm2 - a.areaKm2)[0];
+  assert.ok(engine.getRegionPopulation(capital.id) > engine.getRegionPopulation(largest.id));
+});
+
+test("population asset loader retries a failed fetch and decodes the bundled compressed file", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => new Response("missing", { status: 404 })) as typeof fetch;
+    assert.equal((await loadPopulationGrid()).length, 0);
+    globalThis.fetch = (async (url: string) => {
+      assert.equal(url, POPULATION_GRID_URL);
+      return new Response(readFileSync(`public${POPULATION_GRID_URL}`));
+    }) as typeof fetch;
+    const loaded = await loadPopulationGrid();
+    assert.equal(loaded.length, MAP_W * MAP_H);
+    assert.ok(loaded.some((n) => n > 100_000));
+  } finally { globalThis.fetch = original; }
 });
 
 test("strategic sectors balance Latvia without reducing Poland or Germany", () => {

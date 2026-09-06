@@ -12,6 +12,7 @@ import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselin
 import { CAPITALS } from "./capital-data";
 import { initialCapabilityStates, demographicType } from "./country-capability";
 import { AGE_GROUPS, ageCounts, allocatePeople, census, emptyAgeCounts, populationTotal, pyramidFromCounts, recordPopulationChange, removePeople, type AgeCounts, type PopulationCensus } from "./population-model";
+import { loadPopulationGrid } from "./population-grid";
 import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, applyRefugeeMovement, refugeeArrivalProfile, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
 export type { PolicyDecisionId, PlayerPolicyDecision, PlayerPolicyState, BorderPolicy, RegionLogistics };
 
@@ -334,6 +335,7 @@ export type GameSnapshot = {
   policyStateV2?: { decisionPoints: number; lastDecisionTurn: number; used: Array<{ id: PolicyDecisionId; turn: number }>; active: PolicyDecisionId[] };
   infrastructureV2?: Array<{ roadDensity: number; railDensity: number; airportCount: number; portCount: number; maritimeAccess: number }>;
   regionalPopulationV1?: AgeCounts[];
+  populationDistributionV1?: "ghsl-2020" | "area";
   strategicQuarterStartV1?: StrategicComponents[];
 };
 
@@ -832,13 +834,15 @@ export class WorldEngine {
   private strategicPowerCache = new Map<number, number>();
   private countryCapabilityStates: CountryCapabilityState[] = [];
   private regionalPopulation: AgeCounts[] = [];
+  private initialPopulationWeights = new Float64Array(0);
+  private populationDistribution: "ghsl-2020" | "area" = "area";
   private strategicQuarterStart: StrategicComponents[] = [];
   private capabilityChangedThisTurn = false;
   private highlightOutlineKey = "";
   private highlightOutline: Path2D | null = null;
   private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 1, lastDecisionTurn: 0 };
 
-  private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly ports: Uint16Array<ArrayBufferLike> = new Uint16Array(0)) {
+  private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly ports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly populationGrid: Float32Array<ArrayBufferLike> = new Float32Array(0)) {
     this.countries = countries;
     this.owners = owners;
     this.initialOwners = owners.slice();
@@ -873,6 +877,7 @@ export class WorldEngine {
   static async create(seed = freshSeed()) {
     const terrain = loadElevation();
     const admin1 = loadAdmin1();
+    const population = loadPopulationGrid();
     const rows = worldCountries as CountryRow[];
     const byNumeric = new Map(rows.filter((row) => row.ccn3).map((row) => [row.ccn3 as string, row]));
     const collectionFrom = (source: unknown) => {
@@ -1067,10 +1072,10 @@ export class WorldEngine {
     assignCrimeaToUkraine(owners, countries);
     separateCountriesByWater(owners, countries, "DK", "SE");
     const legacyOwners = rasterizePrevious(legacyUsable, LEGACY_MAP_W, LEGACY_MAP_H);
-    const [elevation, administrative, airports, ports] = await Promise.all([terrain, admin1, loadAirports(), loadPorts()]);
+    const [elevation, administrative, airports, ports, populationGrid] = await Promise.all([terrain, admin1, loadAirports(), loadPorts(), population]);
     assignFrenchGuianaOwner(owners, administrative, countries.find((country) => country.iso === "FR")?.id ?? -1, countries.find((country) => country.iso === "GF")?.id ?? -1);
     assignMapColors(countries, owners);
-    return new WorldEngine(countries, owners, legacyOwners, seed, elevation, administrative, airports, ports);
+    return new WorldEngine(countries, owners, legacyOwners, seed, elevation, administrative, airports, ports, populationGrid);
   }
 
   private random() {
@@ -1740,7 +1745,24 @@ export class WorldEngine {
     return this.regionalPopulation[regionId] ? populationTotal(this.regionalPopulation[regionId]) : 0;
   }
 
-  /** Rozkład początkowy to szacunek powierzchniowy, nie spis regionalny. */
+  private initializePopulationWeights() {
+    this.initialPopulationWeights = new Float64Array(this.strategicRegions.length);
+    if (this.populationGrid.length !== MAP_W * MAP_H) return;
+    for (const region of this.strategicRegions) {
+      let sum = 0;
+      for (const [start, count] of this.strategicRegionRuns[region.id]) for (let i = start; i < start + count; i++) sum += this.populationGrid[i];
+      this.initialPopulationWeights[region.id] = sum;
+    }
+  }
+
+  getPopulationDistribution(countryId: number): "ghsl-2020" | "area" {
+    if (this.populationDistribution === "area") return "area";
+    // Zapis z danymi GHSL pozostaje wiarygodny również podczas awarii pobierania.
+    if (!this.populationGrid.length) return "ghsl-2020";
+    return this.strategicRegions.some((r) => r.ownerId === countryId && this.initialPopulationWeights[r.id] > 0) ? "ghsl-2020" : "area";
+  }
+
+  /** GHS-POP określa udziały regionów, suma kraju pochodzi z roku startowego gry. */
   private synchronizeRegionalPopulation(countryId?: number) {
     if (this.gameMode !== "strategy") return;
     if (this.regionalPopulation.length !== this.strategicRegions.length) this.regionalPopulation = this.strategicRegions.map(() => emptyAgeCounts());
@@ -1751,9 +1773,11 @@ export class WorldEngine {
       const regions = this.strategicRegions.filter((r) => r.ownerId === country.id);
       if (!regions.length) continue;
       const target = ageCounts(state.populationAbsolute, state.demographics);
+      const spatialWeights = regions.map((r) => this.initialPopulationWeights[r.id] ?? 0);
+      const initialWeights = spatialWeights.some((n) => n > 0) ? spatialWeights : regions.map((r) => r.areaKm2);
       for (const group of AGE_GROUPS) {
         const previous = regions.map((r) => this.regionalPopulation[r.id][group]);
-        const weights = previous.some((count) => count > 0) ? previous : regions.map((r) => r.areaKm2);
+        const weights = previous.some((count) => count > 0) ? previous : initialWeights;
         const counts = allocatePeople(target[group], weights);
         regions.forEach((r, index) => { this.regionalPopulation[r.id][group] = counts[index]; });
       }
@@ -4312,6 +4336,8 @@ export class WorldEngine {
     else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
     if (mode !== "strategy") { this.strategicCapitals = []; this.pendingCapitalRelocations.clear(); }
     this.regionalPopulation = [];
+    this.initializePopulationWeights();
+    this.populationDistribution = this.populationGrid.length === MAP_W * MAP_H ? "ghsl-2020" : "area";
     this.synchronizeRegionalPopulation();
     this.strategicQuarterStart = mode === "strategy" ? this.countries.map(({ id }) => ({ ...this.strategicComponents(id) })) : [];
     this.visualRevision++;
@@ -4367,6 +4393,7 @@ export class WorldEngine {
       countryCapabilityStates: this.countryCapabilityStates.map(capabilityStateToSnapshotArray),
       capabilityStatesV2: structuredClone(this.countryCapabilityStates),
       regionalPopulationV1: this.gameMode === "strategy" ? structuredClone(this.regionalPopulation) : undefined,
+      populationDistributionV1: this.gameMode === "strategy" ? this.populationDistribution : undefined,
       strategicQuarterStartV1: this.gameMode === "strategy" ? structuredClone(this.strategicQuarterStart) : undefined,
       policyStateV2: { decisionPoints: this.playerPolicyState.decisionPoints, lastDecisionTurn: this.playerPolicyState.lastDecisionTurn, used: Object.values(this.playerPolicyState.decisions).map((p) => ({ id: p.id, turn: p.lastUsedTurn })), active: this.playerPolicyState.activePolicies.map((p) => p.id) },
       infrastructureV2: this.strategicRegions.map(({ roadDensity, railDensity, airportCount, portCount, maritimeAccess }) => ({ roadDensity, railDensity, airportCount, portCount, maritimeAccess })),
@@ -4506,7 +4533,11 @@ export class WorldEngine {
       this.playerPolicyState.activePolicies = saved.active.filter((id) => this.playerPolicyState.decisions[id]).map((id) => ({ ...this.playerPolicyState.decisions[id] }));
     }
     if (snapshot.infrastructureV2?.length === this.strategicRegions.length) snapshot.infrastructureV2.forEach((infra, id) => Object.assign(this.strategicRegions[id], infra));
-    this.regionalPopulation = snapshot.regionalPopulationV1?.length === this.strategicRegions.length ? structuredClone(snapshot.regionalPopulationV1) : [];
+    this.initializePopulationWeights();
+    const preservePopulation = snapshot.regionalPopulationV1?.length === this.strategicRegions.length
+      && (snapshot.turn > 0 || snapshot.populationDistributionV1 === "ghsl-2020" || !this.populationGrid.length);
+    this.regionalPopulation = preservePopulation ? structuredClone(snapshot.regionalPopulationV1!) : [];
+    this.populationDistribution = preservePopulation ? snapshot.populationDistributionV1 ?? "area" : this.populationGrid.length === MAP_W * MAP_H ? "ghsl-2020" : "area";
     this.synchronizeRegionalPopulation();
     this.strategicQuarterStart = snapshot.strategicQuarterStartV1 ? structuredClone(snapshot.strategicQuarterStartV1) : this.countries.map(({ id }) => ({ ...this.strategicComponents(id) }));
     this.strategicComponentCache.clear();
@@ -5326,6 +5357,7 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
   if (candidate.regionalPopulationV1 !== undefined && (!Array.isArray(candidate.regionalPopulationV1)
     || candidate.regionalPopulationV1.length !== candidate.strategicRegionOwners?.length
     || !candidate.regionalPopulationV1.every((counts) => counts && AGE_GROUPS.every((key) => integer(counts[key]))))) return false;
+  if (candidate.populationDistributionV1 !== undefined && !["ghsl-2020", "area"].includes(candidate.populationDistributionV1)) return false;
   if (candidate.strategicFortifications !== undefined && (!Array.isArray(candidate.strategicFortifications) || !candidate.strategicFortifications.every((value) => finite(value, 0, 100)))) return false;
   if (candidate.strategicCampaigns !== undefined && (!Array.isArray(candidate.strategicCampaigns) || !candidate.strategicCampaigns.every((campaign) => campaign && typeof campaign === "object"
     && integer(campaign.id, 1) && integer(campaign.attackerId, 0) && integer(campaign.defenderId, 0) && integer(campaign.regionId, 0)
