@@ -2405,3 +2405,18 @@ test("a policy remains active for every declared quarter", () => {
   engine.turn++; internals.advancePlayerPolicies();
   assert.ok(!engine.getPlayerPolicyState().activePolicies.some((p) => p.id === policy.id));
 });
+
+test("both logistics panels expose every region and remove obsolete fixed bonuses", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const panels = page.split("\n").filter((line) => line.includes('className="logistics-dossier"'));
+  assert.equal(panels.length, 2);
+  for (const panel of panels) {
+    assert.ok(!panel.includes(".slice("));
+    assert.ok(panel.includes("focusStrategicRegion(item.regionId)"));
+    assert.ok(panel.includes("setInspectedSectorId(item.regionId)"));
+    assert.ok(panel.includes("item.portCount"));
+    assert.ok(!panel.includes("/tk"));
+  }
+  assert.ok(!page.includes("playerOccupations.slice("));
+  assert.ok(page.includes('occupation.progress >= 100 ? "Pełna integracja"'));
+});
