@@ -9,6 +9,8 @@ import { REAL_AIRPORTS_DEFLATE_BASE64 } from "../app/airport-data";
 import { CAPITALS } from "../app/capital-data";
 import { STRATEGIC_BASELINES } from "../app/strategic-baselines";
 import { capabilityStateToSnapshotArray } from "../app/country-capability";
+import { AGE_GROUPS, advancePopulationQuarter, ageCounts, allocatePeople, census, populationTotal, removePeople, type PopulationCensus, type PopulationAccounting } from "../app/population-model";
+import type { StrategicCampaign, StrategicWarHistoryEntry } from "../app/game-engine";
 
 Object.defineProperty(globalThis, "document", {
   configurable: true,
@@ -268,6 +270,10 @@ test("strategic mode uses adjacent provinces, multi-round campaigns and restores
   assert.equal(resolution?.currentDefenderId, 2);
   assert.equal(Math.round(resolution?.retainedProgress ?? 0), Math.round(progressBeforeDecision * .7), "continuing should retain 70 percent of campaign progress");
   assert.equal(conflictEngine.getStrategicCampaigns().find(({ attackerId }) => attackerId === 0)?.defenderId, 2);
+  const redirected = conflictEngine.getStrategicCampaigns().find(({ attackerId }) => attackerId === 0)!;
+  assert.equal(redirected.populationBefore!.defender.population, conflictEngine.getCountryPopulationAbsolute(2));
+  assert.equal(redirected.defenderCasualties, 0);
+  assert.ok(conflictEngine.getStrategicWarHistory(1).some((war) => war.id === conflict!.campaign.id && war.outcome === "withdrawn"));
 
   (restored as unknown as { random: () => number }).random = () => 1;
   let rounds = 1;
@@ -277,6 +283,10 @@ test("strategic mode uses adjacent provinces, multi-round campaigns and restores
   }
   assert.ok(rounds > 1 && rounds < 40, "the campaign should resolve after several quarterly rounds");
   assert.ok(restored.getStrategicRegionIndices(target.id).every((index) => restored.owners[index] === 0), "capture must transfer the entire province");
+  for (const war of restored.getStrategicWarHistory()) assertWarBalance(war);
+  const finished = restored.getStrategicWarHistory().find((war) => war.regionId === target.id && war.attackerId === 0)!;
+  assert.ok(finished.populationAfter && finished.populationBefore);
+  assert.ok(finished.populationAfter.attacker.accounting.combatDeaths > finished.populationBefore.attacker.accounting.combatDeaths);
   const territoryLog = restored.getStrategicTerritoryLog();
   assert.ok(territoryLog.some(({ sectorId, fromOwnerId, toOwnerId }) => sectorId === target.id && fromOwnerId === 1 && toOwnerId === 0));
   const occupation = restored.getStrategicOccupations().find(({ regionId }) => regionId === target.id);
@@ -2155,6 +2165,152 @@ function twoBlockWorld() {
   for (let y = 200; y <= 230; y++) for (let x = 300; x <= 330; x++) owners[indexAt(x, y)] = 1;
   return owners;
 }
+
+function assertRegionalTotals(engine: WorldEngine) {
+  const regions = engine.getStrategicRegions();
+  for (const country of countries) {
+    assert.equal(regions.filter((r) => r.ownerId === country.id).reduce((sum, r) => sum + engine.getRegionPopulation(r.id), 0), engine.getCountryPopulationAbsolute(country.id));
+  }
+}
+
+function assertWarBalance(war: StrategicWarHistoryEntry) {
+  assert.ok(war.populationBefore && war.populationAfter);
+  for (const side of ["attacker", "defender"] as const) {
+    const before: PopulationCensus = war.populationBefore[side], after: PopulationCensus = war.populationAfter[side];
+    const d = (key: keyof PopulationAccounting): number => after.accounting[key] - before.accounting[key];
+    assert.equal(after.population - before.population, d("naturalChange") - d("combatDeaths") + d("refugeesIn") - d("refugeesOut") + d("territoryIn") - d("territoryOut"));
+  }
+}
+
+test("population allocations preserve every person and never remove unavailable ages", () => {
+  assert.deepEqual(allocatePeople(7, [1, 1, 1]), [3, 2, 2]);
+  assert.deepEqual(allocatePeople(3, [0, 0]), [2, 1]);
+  const pyramid = initialCapabilityStates(countries)[0].demographics;
+  const counts = ageCounts(13, pyramid);
+  assert.equal(populationTotal(counts), 13);
+  const removed = removePeople(counts, 99, { children: 0, youth: 0, primeAge: 1, middleAge: 0, elderly: 0, veryOld: 0 });
+  assert.deepEqual(removed, counts);
+});
+
+test("natural population changes count real births and deaths without resurrecting empty countries", () => {
+  const state = initialCapabilityStates(countries)[0];
+  const next = advancePopulationQuarter(state);
+  assert.equal(next.population - state.populationAbsolute, next.net);
+  assert.notDeepEqual(next.demographics, state.demographics);
+  state.populationAbsolute = 0;
+  assert.equal(advancePopulationQuarter(state).population, 0);
+  assert.equal(applyRefugeeMovement(state, 0, 100).populationAbsolute, 0);
+});
+
+test("regional population survives quarters, saved games and legacy migration", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(3, "strategy", "world", "all");
+  assertRegionalTotals(engine);
+  engine.advanceStrategicRound(); assertRegionalTotals(engine);
+  const saved = engine.snapshot();
+  const restored = engineFrom(twoBlockWorld()); restored.load(saved);
+  assert.deepEqual(restored.snapshot().regionalPopulationV1, saved.regionalPopulationV1);
+  restored.advanceStrategicRound(); engine.advanceStrategicRound();
+  assert.deepEqual(restored.snapshot().regionalPopulationV1, engine.snapshot().regionalPopulationV1);
+  assertRegionalTotals(restored);
+  delete saved.regionalPopulationV1;
+  restored.load(saved); assertRegionalTotals(restored);
+});
+
+test("overview and economy use identical effective resources with persistent quarterly deltas", () => {
+  const engine = engineFrom(twoBlockWorld(), undefined, [{ ...countries[0], iso3: "POL" }, { ...countries[1], iso3: "LTU" }]);
+  engine.reset(3, "strategy", "world", "all");
+  const assertPanels = () => {
+    for (const c of countries) for (const item of engine.getCountryCapabilityChanges(c.id)) {
+      assert.equal(item.value, Math.round(Math.max(0, Math.min(100, engine.getStrategicStrength(c.id).components[item.key]))));
+    }
+  };
+  assertPanels();
+  const before = engine.getStrategicStrength(0).components;
+  engine.advanceStrategicRound(); assertPanels();
+  for (const item of engine.getCountryCapabilityChanges(0)) {
+    const now = engine.getStrategicStrength(0).components[item.key];
+    const delta = Math.round((Math.min(100, now) - Math.min(100, before[item.key])) * 10) / 10;
+    assert.equal(item.delta, delta ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)}` : "≈ 0");
+  }
+  const save = engine.snapshot(), expected = engine.getCountryCapabilityChanges(0);
+  engine.load(save); assert.deepEqual(engine.getCountryCapabilityChanges(0), expected);
+  const corrupt = structuredClone(save); corrupt.strategicQuarterStartV1![0].economy = NaN;
+  assert.equal(isSnapshot(corrupt), false);
+});
+
+test("conquest moves residents and ages exactly once, including the last region and reconquest", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(3, "strategy", "world", "all"); engine.turn = 1;
+  const total = countries.reduce((sum, c) => sum + engine.getCountryPopulationAbsolute(c.id), 0);
+  const originalAges = AGE_GROUPS.map((key) => countries.reduce((sum, c) => { const s = engine.getCountryCapabilityState(c.id)!; return sum + ageCounts(s.populationAbsolute, s.demographics)[key]; }, 0));
+  const internal = engine as unknown as { captureStrategicRegion: (campaign: StrategicCampaign, changed: number[], completed: StrategicWarHistoryEntry[]) => unknown };
+  const completed: StrategicWarHistoryEntry[] = [];
+  const targets = engine.getStrategicRegions().filter((r) => r.ownerId === 1);
+  for (const r of targets) {
+    const people = engine.getRegionPopulation(r.id);
+    const before = { attacker: census(engine.getCountryCapabilityState(0)!), defender: census(engine.getCountryCapabilityState(1)!) };
+    internal.captureStrategicRegion({ id: completed.length + 1, attackerId: 0, defenderId: 1, regionId: r.id, progress: 100, turns: 1, populationBefore: before, populationBaselineTurn: 0 }, [], completed);
+    assert.equal(completed.at(-1)!.territoryPopulation, people);
+    assertWarBalance(completed.at(-1)!); assertRegionalTotals(engine);
+  }
+  assert.equal(engine.getCountryPopulationAbsolute(1), 0);
+  assert.equal(engine.getCountryPopulationAbsolute(0), total);
+  const state = engine.getCountryCapabilityState(0)!;
+  assert.deepEqual(AGE_GROUPS.map((key) => ageCounts(state.populationAbsolute, state.demographics)[key]), originalAges);
+  const last = targets[0];
+  internal.captureStrategicRegion({ id: completed.length + 1, attackerId: 1, defenderId: 0, regionId: last.id, progress: 100, turns: 1, populationBefore: { attacker: census(engine.getCountryCapabilityState(1)!), defender: census(state) }, populationBaselineTurn: 0 }, [], completed);
+  assertWarBalance(completed.at(-1)!); assertRegionalTotals(engine);
+  assert.equal(countries.reduce((sum, c) => sum + engine.getCountryPopulationAbsolute(c.id), 0), total);
+  const saved = engine.snapshot(); assert.equal(isSnapshot(saved), true);
+  const restored = engineFrom(twoBlockWorld()); restored.load(saved);
+  assertRegionalTotals(restored);
+  assert.deepEqual(restored.getStrategicWarHistory(), completed);
+  saved.strategicWarHistory![0].populationBefore!.attacker.population = 1;
+  assert.notEqual(restored.getStrategicWarHistory()[0].populationBefore!.attacker.population, 1);
+});
+
+test("population save validation rejects corrupt ages, accounting and census without modifying play", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(3, "strategy", "world", "all");
+  const saved = engine.snapshot();
+  for (const value of [-1, .5, Infinity, NaN]) {
+    const broken = structuredClone(saved); broken.regionalPopulationV1![0].children = value;
+    assert.equal(isSnapshot(broken), false); assert.throws(() => engine.load(broken));
+  }
+  const wrongLength = structuredClone(saved); wrongLength.regionalPopulationV1!.pop();
+  assert.equal(isSnapshot(wrongLength), false);
+  const badAccounting = structuredClone(saved); badAccounting.capabilityStatesV2![0].populationAccounting = { ...census(engine.getCountryCapabilityState(0)!).accounting, combatDeaths: -1 };
+  assert.equal(isSnapshot(badAccounting), false);
+  assert.deepEqual(engine.snapshot().regionalPopulationV1, saved.regionalPopulationV1);
+});
+
+test("both sides receive a balanced end-of-quarter census and casualty records cannot exceed residents", () => {
+  for (const playerId of [0, 1]) {
+    const engine = engineFrom(twoBlockWorld()); engine.reset(3, "strategy", "world", "all"); engine.setPlayerCountry(playerId); engine.turn = 1;
+    const saved = engine.snapshot();
+    saved.capabilityStatesV2![0].populationAbsolute = 11;
+    saved.capabilityStatesV2![1].populationAbsolute = 13;
+    engine.load(saved);
+    const region = engine.getStrategicRegions().find((r) => r.ownerId === 1)!;
+    const campaign: StrategicCampaign = { id: 1, attackerId: 0, defenderId: 1, regionId: region.id, progress: 99, turns: 0, populationBefore: { attacker: census(engine.getCountryCapabilityState(0)!), defender: census(engine.getCountryCapabilityState(1)!) }, populationBaselineTurn: 1 };
+    const internal = engine as unknown as {
+      strategicCampaigns: StrategicCampaign[];
+      recordStrategicBattle: (c: StrategicCampaign, m: number, f: { ratio: number }) => void;
+    };
+    internal.strategicCampaigns = [campaign];
+    internal.recordStrategicBattle(campaign, 18, { ratio: 3 });
+    internal.recordStrategicBattle(campaign, 18, { ratio: 3 });
+    assert.equal(campaign.attackerCasualties, 11);
+    assert.equal(campaign.defenderCasualties, 13);
+    // Force the campaign to finish in this quarter without depending on AI target selection.
+    const completed: StrategicWarHistoryEntry[] = [];
+    (engine as unknown as { finishStrategicWar: (c: StrategicCampaign, outcome: string, wars: StrategicWarHistoryEntry[]) => void }).finishStrategicWar(campaign, "repelled", completed);
+    assertWarBalance(completed[0]); assertRegionalTotals(engine);
+    assert.equal(completed[0].populationAfter!.attacker.population, 0);
+    assert.equal(completed[0].populationAfter!.defender.population, 0);
+    assert.ok(engine.getStrategicWarHistory(playerId).some((w) => w.id === 1));
+    const bad = engine.snapshot(); bad.strategicWarHistory![0].populationBefore!.attacker.population = NaN;
+    assert.equal(isSnapshot(bad), false);
+  }
+});
 
 function idleTurn(engine: WorldEngine) {
   const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;

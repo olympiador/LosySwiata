@@ -10,7 +10,8 @@ import { REAL_AIRPORTS_DEFLATE_BASE64 } from "./airport-data";
 import { REAL_PORTS_DEFLATE_BASE64 } from "./port-data";
 import { STRATEGIC_BASELINES, type StrategicBaseline } from "./strategic-baselines";
 import { CAPITALS } from "./capital-data";
-import { initialCapabilityStates } from "./country-capability";
+import { initialCapabilityStates, demographicType } from "./country-capability";
+import { AGE_GROUPS, ageCounts, allocatePeople, census, emptyAgeCounts, populationTotal, pyramidFromCounts, recordPopulationChange, removePeople, type AgeCounts, type PopulationCensus } from "./population-model";
 import { capabilityStateToSnapshotArray, loadCapabilityStatesFromSnapshot, evaluateCapabilityChange, applyRefugeeMovement, refugeeArrivalProfile, createPlayerPolicyDecisionDefaults, getActivePlayerPolicyEffects, getCountryLogisticsFromRegions, evaluateRegionLogistics, type CountryCapabilityState, type CapabilityDelta, type RegimeType, type PolicyDecisionId, type PlayerPolicyDecision, type PlayerPolicyState, type BorderPolicy, type RegionLogistics } from "./country-capability";
 export type { PolicyDecisionId, PlayerPolicyDecision, PlayerPolicyState, BorderPolicy, RegionLogistics };
 
@@ -134,6 +135,9 @@ export type StrategicCampaign = {
   refugeeDestinations?: StrategicRefugeeDestination[];
   lastMomentum?: number;
   lastRandomFactor?: number;
+  populationBefore?: { attacker: PopulationCensus; defender: PopulationCensus };
+  populationBaselineTurn?: number;
+  territoryPopulation?: number;
 };
 
 export type StrategicRefugeeDestination = {
@@ -178,6 +182,10 @@ export type StrategicWarHistoryEntry = {
   refugeesFledMen: number;
   refugeesFledChildren: number;
   refugeeDestinations: StrategicRefugeeDestination[];
+  populationBefore?: { attacker: PopulationCensus; defender: PopulationCensus };
+  populationAfter?: { attacker: PopulationCensus; defender: PopulationCensus };
+  populationBaselineTurn?: number;
+  territoryPopulation?: number;
 };
 
 type StrategicCapitalLocation = { regionId: number; x: number; y: number; name: string; relocated: boolean };
@@ -325,6 +333,8 @@ export type GameSnapshot = {
   capabilityStatesV2?: CountryCapabilityState[];
   policyStateV2?: { decisionPoints: number; lastDecisionTurn: number; used: Array<{ id: PolicyDecisionId; turn: number }>; active: PolicyDecisionId[] };
   infrastructureV2?: Array<{ roadDensity: number; railDensity: number; airportCount: number; portCount: number; maritimeAccess: number }>;
+  regionalPopulationV1?: AgeCounts[];
+  strategicQuarterStartV1?: StrategicComponents[];
 };
 
 type CountryRow = {
@@ -821,6 +831,8 @@ export class WorldEngine {
   private strategicComponentCache = new Map<number, StrategicComponents>();
   private strategicPowerCache = new Map<number, number>();
   private countryCapabilityStates: CountryCapabilityState[] = [];
+  private regionalPopulation: AgeCounts[] = [];
+  private strategicQuarterStart: StrategicComponents[] = [];
   private capabilityChangedThisTurn = false;
   private highlightOutlineKey = "";
   private highlightOutline: Path2D | null = null;
@@ -1644,12 +1656,12 @@ export class WorldEngine {
   }
 
   getStrategicRegions() { return this.strategicRegions.map((region) => ({ ...region, neighbours: [...region.neighbours] })); }
-  getStrategicCampaigns() { return this.strategicCampaigns.map((campaign) => ({ ...campaign })); }
+  getStrategicCampaigns() { return structuredClone(this.strategicCampaigns); }
   getStrategicTerritoryLog() { return this.strategicTerritoryLog.map((event) => ({ ...event, provinceNames: [...event.provinceNames] })); }
   getStrategicOccupations() { return this.strategicOccupations.map((occupation) => ({ ...occupation })); }
   getStrategicBattleArtifacts() { return this.strategicBattleArtifacts.map((artifact) => ({ ...artifact })); }
   getStrategicWarHistory(countryId?: number) {
-    return this.strategicWarHistory.filter((war) => countryId === undefined || war.attackerId === countryId || war.defenderId === countryId).map((war) => ({ ...war }));
+    return structuredClone(this.strategicWarHistory.filter((war) => countryId === undefined || war.attackerId === countryId || war.defenderId === countryId));
   }
   getStrategicLogisticsInvestments() { return this.strategicLogisticsInvestments.map((item) => ({ ...item })); }
   getStrategicExhaustion(countryId: number) { return this.strategicExhaustion[countryId] ?? 0; }
@@ -1722,6 +1734,59 @@ export class WorldEngine {
   getCountryPopulationAbsolute(countryId: number) {
     const state = this.countryCapabilityStates[countryId];
     return state?.populationAbsolute ?? 0;
+  }
+
+  getRegionPopulation(regionId: number): number {
+    return this.regionalPopulation[regionId] ? populationTotal(this.regionalPopulation[regionId]) : 0;
+  }
+
+  /** Rozkład początkowy to szacunek powierzchniowy, nie spis regionalny. */
+  private synchronizeRegionalPopulation(countryId?: number) {
+    if (this.gameMode !== "strategy") return;
+    if (this.regionalPopulation.length !== this.strategicRegions.length) this.regionalPopulation = this.strategicRegions.map(() => emptyAgeCounts());
+    for (const country of this.countries) {
+      if (countryId !== undefined && country.id !== countryId) continue;
+      const state = this.countryCapabilityStates[country.id];
+      if (!state) continue;
+      const regions = this.strategicRegions.filter((r) => r.ownerId === country.id);
+      if (!regions.length) continue;
+      const target = ageCounts(state.populationAbsolute, state.demographics);
+      for (const group of AGE_GROUPS) {
+        const previous = regions.map((r) => this.regionalPopulation[r.id][group]);
+        const weights = previous.some((count) => count > 0) ? previous : regions.map((r) => r.areaKm2);
+        const counts = allocatePeople(target[group], weights);
+        regions.forEach((r, index) => { this.regionalPopulation[r.id][group] = counts[index]; });
+      }
+    }
+    this.strategicComponentCache.clear();
+    this.strategicPowerCache.clear();
+  }
+
+  private transferRegionalPopulation(regionId: number, from: number, to: number) {
+    this.synchronizeRegionalPopulation(from);
+    this.synchronizeRegionalPopulation(to);
+    const moved = this.regionalPopulation[regionId];
+    const people = populationTotal(moved);
+    const source = this.countryCapabilityStates[from], target = this.countryCapabilityStates[to];
+    for (const [state, sign] of [[source, -1], [target, 1]] as const) {
+      const counts = ageCounts(state.populationAbsolute, state.demographics);
+      for (const group of AGE_GROUPS) counts[group] += sign * moved[group];
+      state.populationAbsolute = populationTotal(counts);
+      state.demographics = pyramidFromCounts(counts, state.demographics);
+      state.demographicType = demographicType(state.demographics);
+      state.components.population = Math.max(0, Math.min(100, state.components.population + sign * people / 1_000_000));
+      recordPopulationChange(state, sign > 0 ? "territoryIn" : "territoryOut", people);
+    }
+    // Mieszkańcy przyjęci wcześniej jako uchodźcy pozostają na zdobytym terenie.
+    const fraction = people / Math.max(1, source.populationAbsolute + people);
+    for (const group of ["women", "men", "children"] as const) {
+      const count = Math.round(source.refugeeComposition[group] * fraction);
+      source.refugeeComposition[group] -= count;
+      target.refugeeComposition[group] += count;
+      source.refugeesHosted -= count;
+      target.refugeesHosted += count;
+    }
+    return people;
   }
 
   getCountryRefugeesHosted(countryId: number) {
@@ -1875,7 +1940,9 @@ export class WorldEngine {
       const occupation = region.originalOwnerId === countryId ? null : this.strategicOccupations.find((item) => item.regionId === region.id && item.ownerId === countryId);
       const integration = region.originalOwnerId === countryId ? 1 : (occupation?.progress ?? 25) / 100;
       economy += source.economy * share * (.15 + .85 * integration);
-      population += source.population * share * (.12 + .88 * integration);
+      const originalPopulation = initialCapabilityStates([this.countries[region.originalOwnerId]])[0].populationAbsolute;
+      const regionalShare = this.regionalPopulation[region.id] ? this.getRegionPopulation(region.id) / Math.max(1, originalPopulation) : share;
+      population += this.strategicBaseline(region.originalOwnerId).population * regionalShare * (.12 + .88 * integration);
       military += source.military * share * (region.originalOwnerId === countryId ? 1 : .05 + .45 * integration);
     }
     const result = { economy, population, military, technology: baseline.technology, logistics: baseline.logistics, stability: baseline.stability };
@@ -1945,17 +2012,20 @@ export class WorldEngine {
   getCountryCapabilityChanges(countryId: number) {
     const state = this.countryCapabilityStates[countryId];
     if (!state) return [];
+    const effective = this.getStrategicStrength(countryId).components;
+    const start = this.strategicQuarterStart[countryId] ?? effective;
+    const displayed = (n: number) => Math.max(0, Math.min(100, n));
     const componentKeys: Array<"economy" | "population" | "technology" | "logistics" | "military" | "stability"> = ["economy", "population", "technology", "logistics", "military", "stability"];
     const labels = { economy: "Gospodarka", population: "Ludność", technology: "Technologia", logistics: "Logistyka", military: "Wojsko", stability: "Instytucje" } as const;
     return componentKeys.map((key) => {
-      const value = state.components[key];
-      const delta = state.change[key];
-      const visible = Math.abs(delta) > 0.02;
+      const value = displayed(effective[key]);
+      const delta = Math.round((value - displayed(start[key])) * 10) / 10;
+      const visible = delta !== 0;
       return {
         key,
         label: labels[key],
         value: Math.round(value),
-        delta: visible ? `${delta > 0.05 ? "+" : ""}${delta.toFixed(1)}` : "≈ 0",
+        delta: visible ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)}` : "≈ 0",
         trend: delta > 0.02 ? "up" : delta < -0.02 ? "down" : "flat",
       };
     });
@@ -2061,12 +2131,28 @@ export class WorldEngine {
     if (!conflict) return null;
     const campaign = this.strategicCampaigns.find(({ id }) => id === conflict.campaign.id);
     if (!campaign) return null;
+    // Nowy właściciel to nowy przeciwnik. Nie przypisuj mu strat poprzedniego kraju.
+    this.finishStrategicWar(campaign, "withdrawn", []);
     if (!continueCampaign) {
       this.strategicCampaigns = this.strategicCampaigns.filter(({ id }) => id !== campaign.id);
       return { continued: false, retainedProgress: 0, currentDefenderId: conflict.currentDefenderId, regionId: campaign.regionId };
     }
     campaign.defenderId = conflict.currentDefenderId;
     campaign.progress = Math.max(5, campaign.progress * .7);
+    campaign.id = this.nextCampaignId++;
+    campaign.turns = 0;
+    campaign.stallTurns = 0;
+    campaign.attackerCasualties = 0;
+    campaign.defenderCasualties = 0;
+    campaign.battles = 0;
+    campaign.refugeesFled = 0;
+    campaign.refugeesFledWomen = 0;
+    campaign.refugeesFledMen = 0;
+    campaign.refugeesFledChildren = 0;
+    campaign.refugeeDestinations = [];
+    campaign.territoryPopulation = 0;
+    campaign.populationBefore = { attacker: census(this.countryCapabilityStates[campaign.attackerId]), defender: census(this.countryCapabilityStates[campaign.defenderId]) };
+    campaign.populationBaselineTurn = this.turn;
     return { continued: true, retainedProgress: campaign.progress, currentDefenderId: conflict.currentDefenderId, regionId: campaign.regionId };
   }
 
@@ -2076,6 +2162,8 @@ export class WorldEngine {
     if (this.strategicCampaigns.some((campaign) => campaign.attackerId === attackerId)) return null;
     const campaign: StrategicCampaign = { id: this.nextCampaignId++, attackerId, defenderId: region.ownerId, regionId, progress: 6 + this.random() * 9, turns: 0, attackerCasualties: 0, defenderCasualties: 0, battles: 0, refugeesFled: 0, refugeesFledWomen: 0, refugeesFledMen: 0, refugeesFledChildren: 0, refugeeDestinations: [] };
     this.strategicCampaigns.push(campaign);
+    campaign.populationBefore = { attacker: census(this.countryCapabilityStates[attackerId]), defender: census(this.countryCapabilityStates[region.ownerId]) };
+    campaign.populationBaselineTurn = this.turn;
     return campaign;
   }
 
@@ -2087,8 +2175,9 @@ export class WorldEngine {
     // thousands, while a prolonged fight for a very large sector can cost far
     // more. Values remain explicit model estimates in the report.
     const scale = Math.max(4_000, Math.min(200_000, 3_000 + sector.areaKm2 / 12));
-    const attackLosses = Math.round(scale * (.55 + Math.max(0, 1 / Math.max(.25, front.ratio) - .55) + Math.max(0, -momentum) * .035));
-    const defenseLosses = Math.round(scale * (.45 + Math.max(0, front.ratio - .65) * .55 + Math.max(0, momentum) * .03));
+    const available = (id: number) => Math.max(0, Math.floor(this.countryCapabilityStates[id].populationAbsolute - (this.strategicPendingCasualties[id] ?? 0)));
+    const attackLosses = Math.min(available(campaign.attackerId), Math.round(scale * (.55 + Math.max(0, 1 / Math.max(.25, front.ratio) - .55) + Math.max(0, -momentum) * .035)));
+    const defenseLosses = Math.min(available(campaign.defenderId), Math.round(scale * (.45 + Math.max(0, front.ratio - .65) * .55 + Math.max(0, momentum) * .03)));
     campaign.attackerCasualties = (campaign.attackerCasualties ?? 0) + attackLosses;
     campaign.defenderCasualties = (campaign.defenderCasualties ?? 0) + defenseLosses;
     this.applyStrategicCasualties(campaign.attackerId, attackLosses);
@@ -2118,8 +2207,15 @@ export class WorldEngine {
       const casualties = this.strategicPendingCasualties[countryId] ?? 0;
       const state = this.countryCapabilityStates[countryId];
       if (!state || casualties <= 0) continue;
-      state.populationAbsolute = Math.max(0, state.populationAbsolute - casualties);
-      state.components.population = Math.max(0, state.components.population - casualties / 1_000_000);
+      const counts = ageCounts(state.populationAbsolute, state.demographics);
+      const removed = removePeople(counts, casualties, { children: 0, youth: .2, primeAge: .6, middleAge: .2, elderly: 0, veryOld: 0 });
+      const deaths = populationTotal(removed);
+      for (const group of AGE_GROUPS) counts[group] -= removed[group];
+      state.populationAbsolute = populationTotal(counts);
+      state.demographics = pyramidFromCounts(counts, state.demographics);
+      state.demographicType = demographicType(state.demographics);
+      recordPopulationChange(state, "combatDeaths", deaths);
+      state.components.population = Math.max(0, state.components.population - deaths / 1_000_000);
       state.manpower.available = Math.max(0, state.manpower.available - Math.max(1, Math.round(casualties / 8_000)));
       this.strategicPendingCasualties[countryId] = 0;
     }
@@ -2128,6 +2224,8 @@ export class WorldEngine {
   }
 
   private finishStrategicWar(campaign: StrategicCampaign, outcome: StrategicWarHistoryEntry["outcome"], completedWars: StrategicWarHistoryEntry[]) {
+    this.settleStrategicCasualties();
+    this.synchronizeRegionalPopulation();
     const war: StrategicWarHistoryEntry = {
       id: campaign.id,
       attackerId: campaign.attackerId,
@@ -2144,6 +2242,10 @@ export class WorldEngine {
       refugeesFledMen: campaign.refugeesFledMen ?? 0,
       refugeesFledChildren: campaign.refugeesFledChildren ?? 0,
       refugeeDestinations: (campaign.refugeeDestinations ?? []).map((destination) => ({ ...destination })),
+      populationBefore: campaign.populationBefore ? structuredClone(campaign.populationBefore) : undefined,
+      populationAfter: { attacker: census(this.countryCapabilityStates[campaign.attackerId]), defender: census(this.countryCapabilityStates[campaign.defenderId]) },
+      populationBaselineTurn: campaign.populationBaselineTurn,
+      territoryPopulation: campaign.territoryPopulation ?? 0,
     };
     this.strategicWarHistory = [...this.strategicWarHistory, war].slice(-1_000);
     completedWars.push(war);
@@ -2156,6 +2258,8 @@ export class WorldEngine {
 
   private captureStrategicRegion(campaign: StrategicCampaign, changed: number[], completedWars: StrategicWarHistoryEntry[]) {
     const region = this.strategicRegions[campaign.regionId], oldOwner = region.ownerId;
+    this.settleStrategicCasualties();
+    campaign.territoryPopulation = this.transferRegionalPopulation(region.id, oldOwner, campaign.attackerId);
     for (const [start, count] of this.strategicRegionRuns[region.id] ?? []) for (let index = start; index < start + count; index++) {
       if (this.owners[index] !== oldOwner) continue;
       this.owners[index] = campaign.attackerId; changed.push(index);
@@ -2263,7 +2367,15 @@ export class WorldEngine {
 
   advanceStrategicRound(playerTargetRegionId: number | null = null): StrategicRoundResult {
     if (this.gameMode !== "strategy") return { records: [], changedIndices: [], completedWars: [] };
+    this.strategicQuarterStart = this.countries.map(({ id }) => ({ ...this.strategicComponents(id) }));
     this.turn++;
+    // Również ostatni kwartał kampanii ma odpływ uchodźców, przed zmianą granic.
+    for (const campaign of this.strategicCampaigns) if (!campaign.populationBefore) {
+      campaign.populationBefore = { attacker: census(this.countryCapabilityStates[campaign.attackerId]), defender: census(this.countryCapabilityStates[campaign.defenderId]) };
+      campaign.populationBaselineTurn = this.turn;
+    }
+    this.distributeStrategicRefugees();
+    this.synchronizeRegionalPopulation();
     const records: TurnRecord[] = [], changedIndices: number[] = [], completedWars: StrategicWarHistoryEntry[] = [];
     this.advanceStrategicOccupations(records);
     this.advanceStrategicExhaustion();
@@ -2315,13 +2427,16 @@ export class WorldEngine {
     this.strategicCampaigns = this.strategicCampaigns.filter((campaign) => {
       if (campaign.progress <= 0 || campaign.progress >= 100) return false;
       const ownerId = this.strategicRegions[campaign.regionId]?.ownerId;
-      if (ownerId === campaign.defenderId) return true;
-      return campaign.attackerId === this.playerCountryId && ownerId !== campaign.attackerId;
+      const attackerExists = this.strategicRegions.some((r) => r.ownerId === campaign.attackerId && this.isStrategicRegionPlayable(r));
+      if (attackerExists && (ownerId === campaign.defenderId || campaign.attackerId === this.playerCountryId && ownerId !== campaign.attackerId)) return true;
+      this.finishStrategicWar(campaign, "withdrawn", completedWars);
+      return false;
     });
     this.updateStrategicCapitals();
-    this.advanceCapabilityStates();
-    this.distributeStrategicRefugees();
     this.settleStrategicCasualties();
+    this.advanceCapabilityStates();
+    this.synchronizeRegionalPopulation();
+    for (const war of completedWars) war.populationAfter = { attacker: census(this.countryCapabilityStates[war.attackerId]), defender: census(this.countryCapabilityStates[war.defenderId]) };
     if (this.playerCountryId !== null) {
       const incoming = this.strategicCampaigns.filter(({ defenderId, regionId }) => defenderId === this.playerCountryId && this.strategicRegions[regionId]?.ownerId === this.playerCountryId);
       if (!incoming.length) {
@@ -2574,7 +2689,7 @@ export class WorldEngine {
       const attackers = new Set(fronts.map(({ attackerId }) => attackerId));
       const recipients = this.strategicCountryNeighbours(sourceId).filter((id) => !attackers.has(id) && this.countryCapabilityStates[id]);
       if (!recipients.length) continue;
-      const population = Math.max(0, source.populationAbsolute || source.components.population * 1_000_000);
+      const population = Math.max(0, source.populationAbsolute);
       const requested = Math.round(Math.min(population * .004, population * (.0008 + fronts.length * .0007)));
       if (!requested) continue;
       const weighted = recipients.map((id) => {
@@ -4196,6 +4311,9 @@ export class WorldEngine {
     if (mode === "strategy") this.buildStrategicRegions();
     else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
     if (mode !== "strategy") { this.strategicCapitals = []; this.pendingCapitalRelocations.clear(); }
+    this.regionalPopulation = [];
+    this.synchronizeRegionalPopulation();
+    this.strategicQuarterStart = mode === "strategy" ? this.countries.map(({ id }) => ({ ...this.strategicComponents(id) })) : [];
     this.visualRevision++;
   }
 
@@ -4219,7 +4337,7 @@ export class WorldEngine {
       playerCountryId: this.playerCountryId,
       strategicRegionSchema: this.gameMode === "strategy" ? 5 : undefined,
       strategicRegionOwners: this.gameMode === "strategy" ? this.strategicRegions.map(({ ownerId }) => ownerId) : undefined,
-      strategicCampaigns: this.gameMode === "strategy" ? this.strategicCampaigns.map((campaign) => ({ ...campaign })) : undefined,
+      strategicCampaigns: this.gameMode === "strategy" ? this.getStrategicCampaigns() : undefined,
       strategicTerritoryLog: this.gameMode === "strategy" ? this.getStrategicTerritoryLog() : undefined,
       strategicOccupations: this.gameMode === "strategy" ? this.getStrategicOccupations() : undefined,
       strategicBattleArtifacts: this.gameMode === "strategy" ? this.getStrategicBattleArtifacts() : undefined,
@@ -4248,6 +4366,8 @@ export class WorldEngine {
       defeats: [...this.defeats],
       countryCapabilityStates: this.countryCapabilityStates.map(capabilityStateToSnapshotArray),
       capabilityStatesV2: structuredClone(this.countryCapabilityStates),
+      regionalPopulationV1: this.gameMode === "strategy" ? structuredClone(this.regionalPopulation) : undefined,
+      strategicQuarterStartV1: this.gameMode === "strategy" ? structuredClone(this.strategicQuarterStart) : undefined,
       policyStateV2: { decisionPoints: this.playerPolicyState.decisionPoints, lastDecisionTurn: this.playerPolicyState.lastDecisionTurn, used: Object.values(this.playerPolicyState.decisions).map((p) => ({ id: p.id, turn: p.lastUsedTurn })), active: this.playerPolicyState.activePolicies.map((p) => p.id) },
       infrastructureV2: this.strategicRegions.map(({ roadDensity, railDensity, airportCount, portCount, maritimeAccess }) => ({ roadDensity, railDensity, airportCount, portCount, maritimeAccess })),
     };
@@ -4329,11 +4449,11 @@ export class WorldEngine {
       if (snapshot.strategicFortifications?.length === this.strategicRegions.length) {
         snapshot.strategicFortifications.forEach((fortification, id) => { this.strategicRegions[id].fortification = Math.max(0, Math.min(100, fortification)); });
       }
-      this.strategicCampaigns = currentStrategicSchema ? snapshot.strategicCampaigns?.map((campaign) => ({ ...campaign })) ?? [] : [];
+      this.strategicCampaigns = currentStrategicSchema ? structuredClone(snapshot.strategicCampaigns ?? []) : [];
       this.strategicTerritoryLog = currentStrategicSchema ? snapshot.strategicTerritoryLog?.map((event) => ({ ...event, provinceNames: [...event.provinceNames] })) ?? [] : [];
       this.strategicBattleArtifacts = snapshot.strategicBattleArtifacts?.map((artifact) => ({ ...artifact })) ?? [];
       this.strategicWarHistory = snapshot.strategicWarHistory?.map((war) => ({
-        ...war,
+        ...structuredClone(war),
         refugeesFled: war.refugeesFled ?? 0,
         refugeesFledWomen: war.refugeesFledWomen ?? 0,
         refugeesFledMen: war.refugeesFledMen ?? 0,
@@ -4386,6 +4506,9 @@ export class WorldEngine {
       this.playerPolicyState.activePolicies = saved.active.filter((id) => this.playerPolicyState.decisions[id]).map((id) => ({ ...this.playerPolicyState.decisions[id] }));
     }
     if (snapshot.infrastructureV2?.length === this.strategicRegions.length) snapshot.infrastructureV2.forEach((infra, id) => Object.assign(this.strategicRegions[id], infra));
+    this.regionalPopulation = snapshot.regionalPopulationV1?.length === this.strategicRegions.length ? structuredClone(snapshot.regionalPopulationV1) : [];
+    this.synchronizeRegionalPopulation();
+    this.strategicQuarterStart = snapshot.strategicQuarterStartV1 ? structuredClone(snapshot.strategicQuarterStartV1) : this.countries.map(({ id }) => ({ ...this.strategicComponents(id) }));
     this.strategicComponentCache.clear();
     this.strategicPowerCache.clear();
     this.visualRevision++;
@@ -5114,6 +5237,16 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
   const validMicrostates = candidate.microstates === undefined || candidate.microstates === "all" || candidate.microstates === "exclude";
   const integer = (item: unknown, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) => typeof item === "number" && Number.isInteger(item) && item >= minimum && item <= maximum;
   const finite = (item: unknown, minimum = -Infinity, maximum = Infinity) => typeof item === "number" && Number.isFinite(item) && item >= minimum && item <= maximum;
+  const validAccounting = (item: unknown) => {
+    if (!item || typeof item !== "object") return false;
+    const record = item as PopulationCensus["accounting"];
+    return integer(record.naturalChange, -Number.MAX_SAFE_INTEGER)
+      && [record.combatDeaths, record.refugeesIn, record.refugeesOut, record.territoryIn, record.territoryOut].every((v) => integer(v));
+  };
+  const validCensus = (item: PopulationCensus) => item && integer(item.population) && validAccounting(item.accounting)
+    && item.demographics && AGE_GROUPS.every((key) => finite(item.demographics[key], 0, 1))
+    && Math.abs(AGE_GROUPS.reduce((sum, key) => sum + item.demographics[key], 0) - 1) < .000001;
+  const validPair = (item: { attacker: PopulationCensus; defender: PopulationCensus } | undefined) => item === undefined || !!item && validCensus(item.attacker) && validCensus(item.defender);
   const dimensions = [[MAP_W, MAP_H], [PREVIOUS_MAP_W, PREVIOUS_MAP_H], [OLDER_MAP_W, OLDER_MAP_H], [LEGACY_MAP_W, LEGACY_MAP_H]];
   const validDimensions = dimensions.some(([width, height]) => candidate.width === width && candidate.height === height);
   if (candidate.version !== 1 || !validMode || !validRegion || !validMicrostates || !validDimensions
@@ -5145,6 +5278,7 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
         && s.components && fields.every((k) => finite(s.components[k]))
         && s.change && fields.every((k) => finite(s.change[k]))
         && finite(s.populationAbsolute, 0) && finite(s.uncertainty) && integer(s.lastEvaluatedTurn)
+        && (s.populationAccounting === undefined || validAccounting(s.populationAccounting))
         && finite(s.assimilationProgress) && finite(s.refugeesHosted, 0) && finite(s.combatExperience)
         && s.demographics && groups.every((k) => finite(s.demographics[k], 0, 1))
         && ["healthy", "chimney", "inverted"].includes(s.demographicType)
@@ -5163,6 +5297,9 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
       || !Array.isArray(p.used) || !p.used.every((u) => u && Object.hasOwn(defaults, u.id) && integer(u.turn, -20))
       || !Array.isArray(p.active) || !p.active.every((id) => Object.hasOwn(defaults, id))) return false;
   }
+  if (candidate.strategicQuarterStartV1 !== undefined && (!Array.isArray(candidate.strategicQuarterStartV1)
+    || candidate.strategicQuarterStartV1.length !== countryCount
+    || !candidate.strategicQuarterStartV1.every((entry) => entry && [entry.economy, entry.population, entry.technology, entry.logistics, entry.military, entry.stability].every((n) => finite(n, 0))))) return false;
   if (candidate.infrastructureV2 !== undefined && (!Array.isArray(candidate.infrastructureV2)
     || !candidate.infrastructureV2.every((i) => i && finite(i.roadDensity, 0, 1) && finite(i.railDensity, 0, 1) && integer(i.airportCount) && integer(i.portCount) && finite(i.maritimeAccess, 0, 100)))) return false;
   if (candidate.warExhaustion !== undefined && (!Array.isArray(candidate.warExhaustion)
@@ -5186,10 +5323,16 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
   if (candidate.playerCountryId !== undefined && candidate.playerCountryId !== null && !integer(candidate.playerCountryId, 0)) return false;
   if (candidate.strategicRegionSchema !== undefined && candidate.strategicRegionSchema !== 1 && candidate.strategicRegionSchema !== 2 && candidate.strategicRegionSchema !== 3 && candidate.strategicRegionSchema !== 4 && candidate.strategicRegionSchema !== 5) return false;
   if (candidate.strategicRegionOwners !== undefined && (!Array.isArray(candidate.strategicRegionOwners) || !candidate.strategicRegionOwners.every((id) => integer(id, 0)))) return false;
+  if (candidate.regionalPopulationV1 !== undefined && (!Array.isArray(candidate.regionalPopulationV1)
+    || candidate.regionalPopulationV1.length !== candidate.strategicRegionOwners?.length
+    || !candidate.regionalPopulationV1.every((counts) => counts && AGE_GROUPS.every((key) => integer(counts[key]))))) return false;
   if (candidate.strategicFortifications !== undefined && (!Array.isArray(candidate.strategicFortifications) || !candidate.strategicFortifications.every((value) => finite(value, 0, 100)))) return false;
   if (candidate.strategicCampaigns !== undefined && (!Array.isArray(candidate.strategicCampaigns) || !candidate.strategicCampaigns.every((campaign) => campaign && typeof campaign === "object"
     && integer(campaign.id, 1) && integer(campaign.attackerId, 0) && integer(campaign.defenderId, 0) && integer(campaign.regionId, 0)
     && finite(campaign.progress, 0, 100) && integer(campaign.turns, 0)
+    && validPair(campaign.populationBefore)
+    && (campaign.populationBaselineTurn === undefined || integer(campaign.populationBaselineTurn, 0, candidate.turn))
+    && (campaign.territoryPopulation === undefined || integer(campaign.territoryPopulation))
     && (campaign.stallTurns === undefined || integer(campaign.stallTurns, 0, 12))
     && (campaign.attackerCasualties === undefined || integer(campaign.attackerCasualties, 0, 10_000_000))
     && (campaign.defenderCasualties === undefined || integer(campaign.defenderCasualties, 0, 10_000_000))
@@ -5218,6 +5361,9 @@ export function isSnapshot(value: unknown): value is GameSnapshot {
       && integer(war.id, 1) && integer(war.attackerId, 0) && integer(war.defenderId, 0) && integer(war.regionId, 0)
       && integer(war.startedTurn, 1) && integer(war.endedTurn, 1) && war.endedTurn >= war.startedTurn
       && ["captured", "repelled", "withdrawn", "stalemate"].includes(war.outcome as string)
+      && validPair(war.populationBefore) && validPair(war.populationAfter)
+      && (war.populationBaselineTurn === undefined || integer(war.populationBaselineTurn, 0, war.endedTurn))
+      && (war.territoryPopulation === undefined || integer(war.territoryPopulation))
       && integer(war.attackerCasualties, 0, 10_000_000) && integer(war.defenderCasualties, 0, 10_000_000) && integer(war.battles, 0, 10_000)
       && (war.refugeesFled === undefined || integer(war.refugeesFled, 0, 100_000_000))
       && (war.refugeesFledWomen === undefined || integer(war.refugeesFledWomen, 0, 100_000_000))

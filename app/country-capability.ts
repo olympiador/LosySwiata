@@ -1,5 +1,6 @@
 import type { Country, StrategicRegion } from "./game-engine";
 import { STRATEGIC_BASELINES } from "./strategic-baselines";
+import { advancePopulationQuarter, ageCounts, emptyAccounting, populationTotal, pyramidFromCounts, removePeople, type PopulationAccounting } from "./population-model";
 
 export type StrategicComponents = { economy: number; population: number; technology: number; logistics: number; military: number; stability: number };
 
@@ -47,6 +48,7 @@ export type CountryCapabilityState = {
   refugeesHosted: number;
   refugeeComposition: RefugeeComposition;
   populationAbsolute: number;
+  populationAccounting?: PopulationAccounting;
   logisticsInvestments: LogisticsInvestment[];
 };
 
@@ -242,7 +244,7 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
       informationEnvironment,
       combatExperience: calibrated?.combatExperience ?? Math.round(((country.id * 17.7) % 20)),
       manpower: initialManpower(country.id),
-      populationAbsolute,
+      populationAbsolute: Math.round(populationAbsolute),
       demographics,
       demographicType: demographicType(demographics),
       borderPolicy: "selective",
@@ -255,21 +257,6 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
   });
 }
 
-function updateDemographics(state: CountryCapabilityState, context: { hasIncoming: boolean; hasOutgoing: boolean; warIntensity: number; technology: number; immigrationPolicy: BorderPolicy }): DemographicPyramid {
-  const pyramid = { ...state.demographics };
-  const birthRate = 0.005 - (context.technology / 100) * 0.003 + (context.immigrationPolicy === "mass" ? 0.001 : 0);
-  const deathRate = 0.004 + (context.technology < 40 ? 0.001 : 0);
-  const agingFactor = 0.001;
-  const warDeathRate = context.hasIncoming ? 0.0008 : context.hasOutgoing ? 0.0004 : 0;
-  const children = clamp(pyramid.children + birthRate - deathRate * 0.6 - warDeathRate * 0.5 - agingFactor * 0.1, 0.05, 0.4);
-  const youth = clamp(pyramid.youth + agingFactor * (pyramid.children - children) - warDeathRate * 0.3, 0.05, 0.3);
-  const primeAge = clamp(pyramid.primeAge + agingFactor * (pyramid.youth - youth) - warDeathRate * 0.5, 0.1, 0.5);
-  const middleAge = clamp(pyramid.middleAge + agingFactor * (pyramid.primeAge - primeAge), 0.05, 0.35);
-  const elderly = clamp(pyramid.elderly + agingFactor * (pyramid.middleAge - middleAge) - deathRate * 0.4, 0.02, 0.3);
-  const veryOld = clamp(pyramid.veryOld + agingFactor * (pyramid.elderly - elderly) - deathRate * 0.6, 0.01, 0.2);
-  const sum = children + youth + primeAge + middleAge + elderly + veryOld;
-  return { children: children / sum, youth: youth / sum, primeAge: primeAge / sum, middleAge: middleAge / sum, elderly: elderly / sum, veryOld: veryOld / sum };
-}
 
 export function demographicType(demographics: DemographicPyramid): DemographicType {
   const young = demographics.children + demographics.youth;
@@ -300,19 +287,24 @@ export function refugeeArrivalProfile(mobilization: CountryCapabilityState["manp
 
 /** Zapisuje faktyczne przekazanie ludzi między dwoma państwami. */
 export function applyRefugeeMovement(state: CountryCapabilityState, incoming: number, outgoing: number, arrivalProfile = refugeeArrivalProfile("hidden")): CountryCapabilityState {
-  const population = Math.max(1, state.populationAbsolute || state.components.population * 1_000_000);
+  const population = Math.max(0, Math.round(state.populationAbsolute));
   const arrivals = Math.max(0, Math.round(incoming));
   const departures = Math.min(Math.max(0, Math.round(outgoing)), Math.round(population * 0.03));
   if (!arrivals && !departures) return state;
 
-  // Uchodźcy częściej są dziećmi oraz ludźmi w wieku produkcyjnym. Wyjazdy
-  // odbierają całemu społeczeństwu proporcjonalną część każdej grupy.
+  // Odpływ ma profil mobilizacji kraju źródłowego, niezależny od profilu napływu.
   const groups: Array<keyof DemographicPyramid> = ["children", "youth", "primeAge", "middleAge", "elderly", "veryOld"];
   const adultShare = 1 - arrivalProfile.children;
   const arrivalShare: DemographicPyramid = { children: arrivalProfile.children, youth: adultShare * .15, primeAge: adultShare * .54, middleAge: adultShare * .20, elderly: adultShare * .08, veryOld: adultShare * .03 };
-  const masses = Object.fromEntries(groups.map((group) => [group, Math.max(0, population * state.demographics[group] - departures * state.demographics[group] + arrivals * arrivalShare[group])])) as Record<keyof DemographicPyramid, number>;
-  const nextPopulation = Math.max(1, population - departures + arrivals);
-  const demographics = Object.fromEntries(groups.map((group) => [group, masses[group] / nextPopulation])) as DemographicPyramid;
+  const departureProfile = refugeeArrivalProfile(state.manpower.mobilization);
+  const adultsLeaving = 1 - departureProfile.children;
+  const departureShare = { children: departureProfile.children, youth: adultsLeaving * .15, primeAge: adultsLeaving * .54, middleAge: adultsLeaving * .20, elderly: adultsLeaving * .08, veryOld: adultsLeaving * .03 };
+  const counts = ageCounts(population, state.demographics);
+  const removed = removePeople(counts, departures, departureShare);
+  const added = ageCounts(arrivals, arrivalShare);
+  const masses = Object.fromEntries(groups.map((group) => [group, counts[group] - removed[group] + added[group]])) as DemographicPyramid;
+  const nextPopulation = populationTotal(masses);
+  const demographics = pyramidFromCounts(masses, state.demographics);
   const netPopulation = arrivals - departures;
   const manpowerDelta = Math.round(netPopulation / 1_000_000 * .22);
   const women = Math.round(arrivals * arrivalProfile.women);
@@ -325,6 +317,7 @@ export function applyRefugeeMovement(state: CountryCapabilityState, incoming: nu
     demographicType: demographicType(demographics),
     manpower: { ...state.manpower, available: Math.max(0, state.manpower.available + manpowerDelta), reserves: Math.max(0, state.manpower.reserves + manpowerDelta) },
     populationAbsolute: nextPopulation,
+    populationAccounting: { ...(state.populationAccounting ?? emptyAccounting()), refugeesIn: (state.populationAccounting?.refugeesIn ?? 0) + arrivals, refugeesOut: (state.populationAccounting?.refugeesOut ?? 0) + departures },
     refugeesHosted: state.refugeesHosted + arrivals,
     refugeeComposition: { women: state.refugeeComposition.women + women, men: state.refugeeComposition.men + men, children: state.refugeeComposition.children + children },
   };
@@ -393,15 +386,12 @@ export function evaluateCapabilityChange(
   const pressure = context.hasIncoming ? 0.12 : context.hasOutgoing ? -0.05 : 0;
   const occupationLoad = Math.min(0.18, context.activeOccupations * 0.04);
   const sanctionsPenalty = context.sanctionsPenalty ?? 0;
-  const immigrationDelta = context.immigrationDelta ?? 0;
-  const technologyImpact = clamp(state.components.technology / 100 * 0.012, 0, 0.01);
-  const baseGrowth = 0.005;
-  const populationGrowth = baseGrowth - technologyImpact + immigrationDelta;
   const warDamage = warIntensity * (1 + state.components.technology / 100 * 0.3);
   const recovery = state.components.economy * 0.03 + state.components.logistics * 0.05;
   const occupationPenalty = context.activeOccupations * 0.1;
   const postWarRecovery = (!context.hasIncoming && !context.hasOutgoing && context.activeOccupations === 0) ? 1 : 0;
-  const demographics = updateDemographics(state, { hasIncoming: context.hasIncoming, hasOutgoing: context.hasOutgoing, warIntensity, technology: state.components.technology, immigrationPolicy: state.borderPolicy });
+  const populationQuarter = advancePopulationQuarter(state);
+  const demographics = populationQuarter.demographics;
   const type = demographicType(demographics);
   const consumption = consumptionDrive(demographics);
   const cliff = demographicCliff(demographics);
@@ -412,7 +402,7 @@ export function evaluateCapabilityChange(
   const policy = context.policyEffects ?? {};
   const change: StrategicComponents = {
     economy: clamp((baseline.economy - state.components.economy) * 0.05 + pressure * 0.8 - occupationLoad * 1.2 + (context.hasOutgoing ? -0.02 : 0) + consumption * 0.03 + cliff.economyPenalty - maritimeBlockade * 0.12 + (policy.economyDelta ?? 0), -100, 100),
-    population: clamp(state.components.population * (populationGrowth / 4) + (context.hasIncoming ? -0.12 : 0.02) - context.activeOccupations * 0.03 + cliff.populationPenalty, -100, 100),
+    population: populationQuarter.net / 1_000_000,
     technology: clamp((baseline.technology - state.components.technology) * 0.03 + (context.hasOutgoing ? -0.08 : 0.03) - sanctionsPenalty * 0.05, -100, 100),
     logistics: clamp((countryLogistics - state.components.logistics) * 0.04 + recovery * (1 + postWarRecovery) - warDamage - occupationPenalty + pressure * 1.3 + (state.assimilationProgress < 30 ? -0.02 : 0), -100, 100),
     military: clamp((baseline.military - state.components.military) * 0.06 + (context.hasOutgoing ? 0.3 : -0.05) + (context.hasIncoming ? 0.1 : 0) + cliff.manpowerPenalty * 0.5, -100, 100),
@@ -436,7 +426,7 @@ export function evaluateCapabilityChange(
     servicesStrength: clamp(infoEnv.servicesStrength + (policy.informationEnvironment?.servicesStrength ?? 0)),
   };
 
-  const population = state.components.population + change.population + immigrationEffects.populationDelta;
+  const population = state.components.population + change.population;
   const military = state.components.military + change.military + (policy.combatExperienceChange ?? 0);
   const activeManpower = Math.max(0, Math.round(military * 0.55));
   const reserves = Math.max(0, Math.round(population * 0.12 - activeManpower));
@@ -444,7 +434,7 @@ export function evaluateCapabilityChange(
   const mobilizationMultiplier = mobilization === "full" ? 1.35 : mobilization === "open" ? 1.18 : 1;
   const frontCount = context.hasOutgoing ? 1 : 0;
   const maintenanceCost = Math.round((military * 0.08 + frontCount * 6 + (mobilization === "full" ? 14 : mobilization === "open" ? 7 : 0)) * 10) / 10;
-  const populationScale = state.populationAbsolute > 0 ? state.populationAbsolute : state.components.population * 1_000_000;
+  const populationScale = populationQuarter.population;
   const assimilationRateValue = assimilationRate(0.15, regimeType);
   const postAssimilationState = applyAssimilation(state, context.activeOccupations > 0 ? assimilationRateValue : 0);
   const assimilationBonus = postAssimilationState.assimilationProgress >= 100 ? { economyBonus: 5, logisticsBonus: 3, stabilityBonus: 2 } : { economyBonus: 0, logisticsBonus: 0, stabilityBonus: 0 };
@@ -459,13 +449,13 @@ export function evaluateCapabilityChange(
     },
     uncertainty: clamp(state.uncertainty * 0.985 + 0.002 + (context.areaShare > 1.2 ? 0.015 : 0)),
     lastEvaluatedTurn: turn,
-    change: { ...change, population: change.population + immigrationEffects.populationDelta, stability: stabilityFinal - state.components.stability },
+    change: { ...change, stability: stabilityFinal - state.components.stability },
     regimeType,
     informationEnvironment,
     combatExperience: clamp(state.combatExperience + (policy.combatExperienceChange ?? 0)),
     manpower: { available: Math.max(0, Math.round((populationScale / 1_000_000) * 0.22 * mobilizationMultiplier)), active: Math.min(activeManpower, Math.max(0, Math.round((populationScale / 1_000_000) * 0.22 * mobilizationMultiplier))), reserves: Math.max(0, Math.round((populationScale / 1_000_000) * 0.22 * mobilizationMultiplier - activeManpower)), mobilization, maintenanceCost },
-    demographics: postAssimilationState.demographics,
-    demographicType: demographicType(postAssimilationState.demographics),
+    demographics,
+    demographicType: demographicType(demographics),
     borderPolicy: immigrationPolicy,
     // Czas trwania inwestycji odlicza silnik w advancePlayerPolicies().
     // Nie robimy tego tutaj drugi raz, bo aktualizacja zdolności państwa
@@ -475,7 +465,8 @@ export function evaluateCapabilityChange(
     assimilationProgress: postAssimilationState.assimilationProgress,
     refugeesHosted: state.refugeesHosted,
     refugeeComposition: state.refugeeComposition,
-    populationAbsolute: state.populationAbsolute,
+    populationAbsolute: populationQuarter.population,
+    populationAccounting: { ...(state.populationAccounting ?? emptyAccounting()), naturalChange: (state.populationAccounting?.naturalChange ?? 0) + populationQuarter.net },
   };
   return updated;
 }
