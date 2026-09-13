@@ -2,6 +2,19 @@
 
 Ten dokument opisuje aktualny model zdolności państwowej w grze Losy Świata. Jest źródłem prawdy dla obliczeń, UI i danych. Wszystkie nowe zmiany muszą być odzwierciedlone tutaj.
 
+## Warstwa decyzji strategicznych
+
+Tryb Strategiczny łączy sześć systemów w jeden obieg decyzji:
+
+1. Decyzja prezydenta pokazuje przed wykonaniem koszt i zmianę na kwartał, a planowana wojna — szansę oraz dokładne skutki polityczne.
+2. Relacje dwóch państw składają się z zaufania, napięcia i pamięci wojny. Napięcie opada szybciej niż pamięć, więc jedna decyzja nie zeruje całej historii stosunków.
+3. Wojna wymaga casus belli. Uzasadnienie zmienia legitymizację, reputację, poparcie wojny, relację z przeciwnikiem i tempo późniejszej integracji.
+4. Gospodarka używa pięciu kategorii bezpieczeństwa: energia, przemysł, żywność, technologie i transport. Najsłabsze kategorie wyznaczają gotowość; realny niedobór obniża siłę ofensywy.
+5. Po zdobyciu sektora gracz wybiera aneksję, autonomię albo protektorat, może też się wycofać. Modele różnią się tempem integracji, dostępem do zasobów i kosztem reputacji.
+6. Każde państwo ma cztery równoległe cele: przetrwanie, bezpieczne zaplecze, modernizację i znaczenie regionalne. Dają łącznie 100 punktów i pozwalają małym państwom prowadzić sensowną kampanię bez podboju świata.
+
+Systemy te są aktywne wyłącznie w trybie Strategicznym. Stan polityczny, pamięć relacji, casus belli i model okupacji są zachowywane w zapisie gry.
+
 ## 1. Cel modelu
 
 Każde państwo ma profil 6 wymiarów w skali 0–100. Bez jednej fałszywie precyzyjnej liczby „siły”. Zmiany są czysto deterministyczne i mają przyczynę: kontekst tury, polityka gracza, okupacja, wydarzenia.

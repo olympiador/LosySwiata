@@ -66,7 +66,10 @@ export type PolicyDecisionId =
   | "modernize-roads"
   | "expand-airport"
   | "rail-upgrade"
-  | "fortify-sector";
+  | "fortify-sector"
+  | "energy-resilience"
+  | "industrial-reserves"
+  | "food-security";
 
 export type PlayerPolicyDecision = {
   id: PolicyDecisionId;
@@ -81,6 +84,7 @@ export type PlayerPolicyDecision = {
     stabilityDelta?: number;
     combatExperienceChange?: number;
     logisticsInvestment?: { regionId: number; type: "port" | "road" | "airport" | "rail"; bonus: number };
+    resourceSecurity?: Partial<Record<"energy" | "industry" | "food" | "technology" | "logistics", number>>;
   };
   costs: Partial<StrategicComponents> & { stabilityDelta?: number | ((state: CountryCapabilityState) => number); economyDelta?: number | ((state: CountryCapabilityState) => number) };
   duration: number;
@@ -95,6 +99,18 @@ export type PlayerPolicyState = {
   activePolicies: PlayerPolicyDecision[];
   decisionPoints: number;
   lastDecisionTurn: number;
+};
+
+export type ActivePlayerPolicyEffects = {
+  economyDelta?: number;
+  stabilityDelta?: number;
+  technologyBurst?: number;
+  combatExperienceChange?: number;
+  borderPolicy?: BorderPolicy;
+  informationEnvironment?: Partial<CountryCapabilityState["informationEnvironment"]>;
+  manpower?: Partial<CountryCapabilityState["manpower"]>;
+  logisticsInvestment?: PlayerPolicyDecision["effects"]["logisticsInvestment"];
+  resourceSecurity?: Partial<Record<"energy" | "industry" | "food" | "technology" | "logistics", number>>;
 };
 
 export type CapabilityDelta = { key: string; label: string; value: number; delta: string; trend: "up" | "down" | "flat" };
@@ -373,7 +389,7 @@ export function evaluateCapabilityChange(
     sanctionsPenalty?: number;
     immigrationDelta?: number;
     warIntensity?: number;
-    policyEffects?: any;
+    policyEffects?: ActivePlayerPolicyEffects;
     regions?: StrategicRegion[];
     countryId?: number;
     maritimeBlockade?: number;
@@ -488,6 +504,9 @@ export function createPlayerPolicyDecisionDefaults(): Record<PolicyDecisionId, P
     "expand-airport": { id: "expand-airport", name: "Rozbudowa lotniska", description: "Po 6 kwartałach region zyskuje jedno lotnisko, które pozostaje po zakończeniu inwestycji.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.economy > 30 },
     "rail-upgrade": { id: "rail-upgrade", name: "Modernizacja kolei", description: "Po 6 kwartałach dostępność kolei w regionie trwale rośnie o 15 pkt, do 100.", cost: 1, effects: {}, costs: { economyDelta: -4 }, duration: 6, cooldown: 14, lastUsedTurn: -20, condition: (state) => state.components.technology > 25 },
     "fortify-sector": { id: "fortify-sector", name: "Przygotuj umocnienia", description: "Budowa trwałych umocnień w wybranym sektorze. Każda decyzja zwiększa jego obronę o 25 pkt.", cost: 2, effects: {}, costs: { economyDelta: -5 }, duration: 1, cooldown: 12, lastUsedTurn: -20, condition: () => true },
+    "energy-resilience": { id: "energy-resilience", name: "Odporność energetyczna", description: "Dywersyfikacja dostaw daje +18 bezpieczeństwa energii przez 8 kwartałów; koszt jest rozłożony w czasie.", cost: 1, effects: { resourceSecurity: { energy: 18 } }, costs: { economyDelta: -3 }, duration: 8, cooldown: 14, lastUsedTurn: -20, condition: () => true },
+    "industrial-reserves": { id: "industrial-reserves", name: "Rezerwy przemysłowe", description: "Zapasy części i materiałów dają +15 bezpieczeństwa przemysłu przez 6 kwartałów.", cost: 1, effects: { resourceSecurity: { industry: 15 } }, costs: { economyDelta: -3 }, duration: 6, cooldown: 12, lastUsedTurn: -20, condition: () => true },
+    "food-security": { id: "food-security", name: "Bezpieczeństwo żywnościowe", description: "Rezerwy i kontrakty rolne dają +18 bezpieczeństwa żywności przez 8 kwartałów.", cost: 1, effects: { resourceSecurity: { food: 18 } }, costs: { economyDelta: -2 }, duration: 8, cooldown: 14, lastUsedTurn: -20, condition: () => true },
   };
 }
 
@@ -557,8 +576,8 @@ export function demographicLabel(type: DemographicType): string {
   return { healthy: "Zdrowa piramida", chimney: "Kominek", inverted: "Odwrócona piramida" }[type];
 }
 
-export function getActivePlayerPolicyEffects(state: PlayerPolicyState): any {
-  const effects: any = {};
+export function getActivePlayerPolicyEffects(state: PlayerPolicyState): ActivePlayerPolicyEffects {
+  const effects: ActivePlayerPolicyEffects = {};
   for (const policy of state.activePolicies) {
     const perQuarter = Math.max(1, policy.duration);
     if (policy.effects.informationEnvironment?.mediaControl) effects.informationEnvironment = { ...effects.informationEnvironment, mediaControl: (effects.informationEnvironment?.mediaControl ?? 0) + policy.effects.informationEnvironment.mediaControl / perQuarter };
@@ -569,6 +588,13 @@ export function getActivePlayerPolicyEffects(state: PlayerPolicyState): any {
     if (policy.effects.immigrationPolicy) effects.borderPolicy = policy.effects.immigrationPolicy;
     if (policy.effects.manpower?.mobilization) effects.manpower = { ...effects.manpower, mobilization: policy.effects.manpower.mobilization };
     if (policy.effects.logisticsInvestment) effects.logisticsInvestment = policy.effects.logisticsInvestment;
+    if (policy.effects.resourceSecurity) {
+      effects.resourceSecurity = { ...(effects.resourceSecurity ?? {}) };
+      for (const key of ["energy", "industry", "food", "technology", "logistics"] as const) {
+        const value = policy.effects.resourceSecurity[key];
+        if (value !== undefined) effects.resourceSecurity[key] = (effects.resourceSecurity[key] ?? 0) + value;
+      }
+    }
     const economyCost = policy.costs.economyDelta;
     const stabilityCost = policy.costs.stabilityDelta;
     if (typeof economyCost === "number") effects.economyDelta = (effects.economyDelta ?? 0) + economyCost / perQuarter;

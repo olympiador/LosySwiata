@@ -12,6 +12,7 @@ import { capabilityStateToSnapshotArray } from "../app/country-capability";
 import { AGE_GROUPS, advancePopulationQuarter, ageCounts, allocatePeople, census, populationTotal, removePeople, type PopulationCensus, type PopulationAccounting } from "../app/population-model";
 import type { StrategicCampaign, StrategicWarHistoryEntry } from "../app/game-engine";
 import { decodePopulationGrid, loadPopulationGrid, POPULATION_GRID_URL } from "../app/population-grid";
+import { STRATEGIC_CASUS_BELLI, deriveStrategicResourceSecurity, strategicObjectives } from "../app/strategic-systems";
 
 Object.defineProperty(globalThis, "document", {
   configurable: true,
@@ -2668,5 +2669,73 @@ test("both logistics panels expose every region and remove obsolete fixed bonuse
     assert.ok(!panel.includes("/tk"));
   }
   assert.ok(!page.includes("playerOccupations.slice("));
-  assert.ok(page.includes('occupation.progress >= 100 ? "Pełna integracja"'));
+  assert.ok(page.includes("ZARZĄDZANIE ZDOBYCZAMI"));
+});
+
+test("strategic war preview exposes exact political and diplomatic consequences", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(11, "strategy", "world", "all"); engine.setPlayerCountry(0);
+  const target = engine.getStrategicTargets(0)[0];
+  assert.ok(target);
+  const preview = engine.getStrategicWarPreview(0, target.ownerId, target.id, "opportunistic");
+  assert.equal(preview.politicalAfter.reputation, preview.politicalBefore.reputation + STRATEGIC_CASUS_BELLI.opportunistic.reputationDelta);
+  assert.equal(preview.relationAfter.warMemory, STRATEGIC_CASUS_BELLI.opportunistic.memoryDelta);
+  assert.ok(preview.consequences.some((item) => item.includes("reputacja")));
+  engine.advanceStrategicRound(target.id, "opportunistic");
+  assert.equal(engine.getStrategicCampaigns().find((campaign) => campaign.attackerId === 0)?.casusBelli, "opportunistic");
+  assert.ok(engine.getStrategicRelation(0, target.ownerId).warMemory > 0);
+});
+
+test("resource security is bottleneck-driven and can be improved by a focused policy", () => {
+  const isolated = deriveStrategicResourceSecurity({ economy: 70, population: 50, technology: 65, logistics: 60, military: 55, stability: 60 }, { outgoing: 0, incoming: 0, occupations: 0 });
+  const invaded = deriveStrategicResourceSecurity({ economy: 70, population: 50, technology: 65, logistics: 60, military: 55, stability: 60 }, { outgoing: 0, incoming: 2, occupations: 0 });
+  assert.ok(invaded.readiness < isolated.readiness);
+  const engine = engineFrom(twoBlockWorld()); engine.reset(12, "strategy", "world", "all"); engine.setPlayerCountry(0);
+  const before = engine.getStrategicResourceSecurity(0).energy;
+  assert.ok(engine.activatePlayerPolicy("energy-resilience"));
+  assert.ok(engine.getStrategicResourceSecurity(0).energy >= before + 17.9);
+  assert.ok(engine.getPlayerPolicyPreview("energy-resilience")?.summary.includes("energia +18"));
+});
+
+test("occupation models change resource ceiling and withdrawal restores the previous owner", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(13, "strategy", "world", "all"); engine.setPlayerCountry(0);
+  const target = engine.getStrategicRegions().find((region) => region.ownerId === 1)!;
+  const save = engine.snapshot();
+  save.strategicRegionOwners![target.id] = 0;
+  save.strategicOccupations = [{ regionId: target.id, ownerId: 0, previousOwnerId: 1, progress: 40, startedTurn: 1, lastGain: 0, policy: "annexation", casusBelli: "territorial-claim" }];
+  engine.load(save); engine.setPlayerCountry(0);
+  assert.ok(engine.setStrategicOccupationPolicy(target.id, "autonomy"));
+  assert.equal(engine.getStrategicOccupations()[0].policy, "autonomy");
+  assert.ok(engine.setStrategicOccupationPolicy(target.id, "withdrawal"));
+  assert.equal(engine.getStrategicRegions()[target.id].ownerId, 1);
+  assert.equal(engine.getStrategicOccupations().length, 0);
+});
+
+test("small-state strategic objectives offer four non-conquest paths", () => {
+  const resources = deriveStrategicResourceSecurity({ economy: 60, population: 20, technology: 60, logistics: 60, military: 15, stability: 70 }, { outgoing: 0, incoming: 0, occupations: 0 });
+  const objectives = strategicObjectives(20, 2, 9, { economy: 60, population: 20, technology: 60, logistics: 60, military: 15, stability: 70 }, resources, 0);
+  assert.deepEqual(objectives.map(({ id }) => id), ["survival", "security", "modernization", "regional-rank"]);
+  assert.ok(objectives.filter(({ completed }) => completed).length >= 3);
+  assert.equal(objectives.reduce((sum, objective) => sum + objective.points, 0), 100);
+});
+
+test("strategic diplomacy and politics survive a save round-trip", () => {
+  const engine = engineFrom(twoBlockWorld()); engine.reset(14, "strategy", "world", "all"); engine.setPlayerCountry(0);
+  const target = engine.getStrategicTargets(0)[0];
+  engine.advanceStrategicRound(target.id, "territorial-claim");
+  const save = engine.snapshot();
+  assert.equal(isSnapshot(save), true);
+  const restored = engineFrom(twoBlockWorld()); restored.load(save);
+  assert.deepEqual(restored.snapshot().strategicPoliticsV1, save.strategicPoliticsV1);
+  assert.deepEqual(restored.snapshot().strategicRelationsV1, save.strategicRelationsV1);
+});
+
+test("map dragging renders at most once per frame without rerendering the React dashboard", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const renderer = readFileSync(new URL("../app/webgl-map-renderer.ts", import.meta.url), "utf8");
+  const pointerMove = page.slice(page.indexOf("const pointerMove"), page.indexOf("const finishPointer"));
+  assert.ok(pointerMove.includes("applyView(zoomRef.current"));
+  assert.ok(pointerMove.match(/}, false\);/g)?.length === 2, "pan and pinch both use the non-committing interactive path");
+  assert.ok(!pointerMove.includes("setPan("), "pointer events must not rerender the full dashboard");
+  assert.ok(page.includes("window.requestAnimationFrame"), "interactive draws must be coalesced to animation frames");
+  assert.ok(renderer.includes("if (u_interacting > .5)"), "the GPU must use the lightweight shader path during motion");
 });

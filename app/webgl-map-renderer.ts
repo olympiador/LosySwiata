@@ -1,4 +1,4 @@
-type MapView = { zoom: number; panX: number; panY: number; selectedOwner?: number; selectedRegion?: number };
+type MapView = { zoom: number; panX: number; panY: number; selectedOwner?: number; selectedRegion?: number; interacting?: boolean };
 
 export interface MapRenderer {
   readonly kind: "GPU" | "2D";
@@ -25,6 +25,7 @@ uniform sampler2D u_administrative;
 uniform float u_zoom;
 uniform float u_selectedOwner;
 uniform float u_selectedRegion;
+uniform float u_interacting;
 uniform vec2 u_pan;
 uniform vec2 u_viewSize;
 in vec2 v_screen;
@@ -98,6 +99,19 @@ void main() {
   vec2 world = vec2(.5) + (v_screen - vec2(.5) - u_pan) / u_zoom;
   world.x = fract(world.x);
   world.y = clamp(world.y, 0.0, 1.0);
+  // During a pan or pinch the eye follows motion, not sub-pixel borders.
+  // Skip the expensive multi-sample contour reconstruction for those frames;
+  // the full-quality image is restored immediately when the gesture ends.
+  if (u_interacting > .5) {
+    vec4 movingColour = texture(u_map, world);
+    if (u_selectedRegion > 0.0) {
+      vec3 raw = floor(texture(u_identity, world).rgb * 255.0 + .5);
+      float movingRegion = raw.g + raw.b * 256.0;
+      if (movingRegion == u_selectedRegion) movingColour.rgb = mix(movingColour.rgb, vec3(.02, .72, .86), .18);
+    }
+    outColor = vec4(movingColour.rgb, 1.0);
+    return;
+  }
   vec2 identityUv;
   vec3 currentIdentity = visualIdsAt(world, identityUv);
   // Both textures describe the same projected map. Sampling the political
@@ -198,6 +212,7 @@ export class WebGLMapRenderer {
   private readonly zoomLocation: WebGLUniformLocation;
   private readonly selectedOwnerLocation: WebGLUniformLocation;
   private readonly selectedRegionLocation: WebGLUniformLocation;
+  private readonly interactingLocation: WebGLUniformLocation;
   private readonly panLocation: WebGLUniformLocation;
   private readonly viewSizeLocation: WebGLUniformLocation;
   private hasTexture = false;
@@ -214,8 +229,8 @@ export class WebGLMapRenderer {
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? "Błąd programu mapy");
     this.program = program;
     const mapTexture = gl.createTexture(), outlineTexture = gl.createTexture(), identityTexture = gl.createTexture(), administrativeTexture = gl.createTexture();
-    const zoomLocation = gl.getUniformLocation(program, "u_zoom"), selectedOwnerLocation = gl.getUniformLocation(program, "u_selectedOwner"), selectedRegionLocation = gl.getUniformLocation(program, "u_selectedRegion"), panLocation = gl.getUniformLocation(program, "u_pan"), viewSizeLocation = gl.getUniformLocation(program, "u_viewSize");
-    if (!mapTexture || !outlineTexture || !identityTexture || !administrativeTexture || !zoomLocation || !selectedOwnerLocation || !selectedRegionLocation || !panLocation || !viewSizeLocation) throw new Error("Nie udało się przygotować tekstur mapy");
+    const zoomLocation = gl.getUniformLocation(program, "u_zoom"), selectedOwnerLocation = gl.getUniformLocation(program, "u_selectedOwner"), selectedRegionLocation = gl.getUniformLocation(program, "u_selectedRegion"), interactingLocation = gl.getUniformLocation(program, "u_interacting"), panLocation = gl.getUniformLocation(program, "u_pan"), viewSizeLocation = gl.getUniformLocation(program, "u_viewSize");
+    if (!mapTexture || !outlineTexture || !identityTexture || !administrativeTexture || !zoomLocation || !selectedOwnerLocation || !selectedRegionLocation || !interactingLocation || !panLocation || !viewSizeLocation) throw new Error("Nie udało się przygotować tekstur mapy");
     this.mapTexture = mapTexture;
     this.outlineTexture = outlineTexture;
     this.identityTexture = identityTexture;
@@ -223,6 +238,7 @@ export class WebGLMapRenderer {
     this.zoomLocation = zoomLocation;
     this.selectedOwnerLocation = selectedOwnerLocation;
     this.selectedRegionLocation = selectedRegionLocation;
+    this.interactingLocation = interactingLocation;
     this.panLocation = panLocation;
     this.viewSizeLocation = viewSizeLocation;
 
@@ -276,13 +292,14 @@ export class WebGLMapRenderer {
     this.hasTexture = true;
   }
 
-  draw({ zoom, panX, panY, selectedOwner = 0, selectedRegion = 0 }: MapView) {
+  draw({ zoom, panX, panY, selectedOwner = 0, selectedRegion = 0, interacting = false }: MapView) {
     if (!this.hasTexture) return;
     const gl = this.gl;
     gl.useProgram(this.program);
     gl.uniform1f(this.zoomLocation, zoom);
     gl.uniform1f(this.selectedOwnerLocation, selectedOwner);
     gl.uniform1f(this.selectedRegionLocation, selectedRegion);
+    gl.uniform1f(this.interactingLocation, interacting ? 1 : 0);
     gl.uniform2f(this.panLocation, panX, panY);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }

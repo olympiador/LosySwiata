@@ -46,6 +46,8 @@ import {
   ACTIONS,
   CATACLYSM_EVERY_TURNS,
   DIRECTIONS,
+  STRATEGIC_CASUS_BELLI,
+  STRATEGIC_OCCUPATION_POLICIES,
   MAP_H,
   MAP_W,
   SIZE_LABELS,
@@ -67,9 +69,11 @@ import {
   type PolicyDecisionId,
   type PlayerPolicyDecision,
   type StrategicCampaign,
+  type StrategicCasusBelliId,
   type StrategicBattleArtifact,
   type StrategicDefensePosture,
   type StrategicOccupation,
+  type StrategicOccupationPolicyChoice,
   type StrategicRegion,
   type StrategicWarHistoryEntry,
   type SizeKey,
@@ -140,6 +144,7 @@ type Gesture = {
   points: Map<number, Point>;
   last: Point | null;
   pinch: { distance: number; center: Point; zoom: number; pan: Point } | null;
+  frame: { left: number; top: number; width: number; height: number } | null;
   moved: boolean;
   hadMulti: boolean;
 };
@@ -272,6 +277,7 @@ export default function Home() {
   const [pendingRegion, setPendingRegion] = useState<GameRegion | null>(null);
   const [playerCountryId, setPlayerCountryId] = useState<number | null>(null);
   const [strategicTargetId, setStrategicTargetId] = useState<number | null>(null);
+  const [strategicCasusBelli, setStrategicCasusBelli] = useState<StrategicCasusBelliId>("security-threat");
   const [inspectedSectorId, setInspectedSectorId] = useState<number | null>(null);
   const [strategicRegions, setStrategicRegions] = useState<StrategicRegion[]>([]);
   const [strategicCampaigns, setStrategicCampaigns] = useState<StrategicCampaign[]>([]);
@@ -339,11 +345,13 @@ export default function Home() {
   const focusTimer = useRef<number | null>(null);
   const zoomRef = useRef(1);
   const panRef = useRef<Point>({ x: 0, y: 0 });
+  const interactiveFrameRef = useRef<number | null>(null);
+  const paintRef = useRef<() => void>(() => {});
   const labelKeyRef = useRef("");
   const labelViewKeyRef = useRef("");
   const backdropKeyRef = useRef("");
   const fallbackBorderZoomRef = useRef(-1);
-  const gestureRef = useRef<Gesture>({ points: new Map(), last: null, pinch: null, moved: false, hadMulti: false });
+  const gestureRef = useRef<Gesture>({ points: new Map(), last: null, pinch: null, frame: null, moved: false, hadMulti: false });
 
   useEffect(() => { speedRef.current = speed; }, [speed]);
 
@@ -404,9 +412,33 @@ export default function Home() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(instance.snapshot())); } catch { /* storage can be unavailable */ }
   }, []);
 
-  const applyView = useCallback((nextZoom: number, nextPan: Point) => {
+  const drawInteractiveView = useCallback(() => {
+    if (interactiveFrameRef.current !== null) return;
+    interactiveFrameRef.current = window.requestAnimationFrame(() => {
+      interactiveFrameRef.current = null;
+      const renderer = mapRendererRef.current;
+      const frame = mapRef.current;
+      if (!renderer || !frame) return;
+      if (!renderer.screenSpaceBorders) {
+        paintRef.current();
+        return;
+      }
+      const rect = frame.getBoundingClientRect();
+      const focusedRegionId = strategicTargetId ?? inspectedSectorId;
+      renderer.draw({
+        zoom: zoomRef.current,
+        panX: panRef.current.x / Math.max(1, rect.width),
+        panY: -panRef.current.y / Math.max(1, rect.height),
+        selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1,
+        selectedRegion: focusedRegionId === null ? 0 : focusedRegionId + 1,
+        interacting: true,
+      });
+    });
+  }, [inspectedSectorId, strategicTargetId]);
+
+  const applyView = useCallback((nextZoom: number, nextPan: Point, commit = true) => {
     const clampedZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom));
-    const rect = mapRef.current?.getBoundingClientRect();
+    const rect = gestureRef.current.frame ?? mapRef.current?.getBoundingClientRect();
     const limitY = rect ? rect.height * (clampedZoom - 1) / 2 : 0;
     const circumference = rect ? rect.width * clampedZoom : 0;
     const wrappedX = circumference
@@ -418,10 +450,28 @@ export default function Home() {
     };
     zoomRef.current = clampedZoom;
     panRef.current = clampedPan;
-    setZoom(clampedZoom);
-    setPan(clampedPan);
+    if (commit) {
+      setZoom(clampedZoom);
+      setPan(clampedPan);
+      setHover(null);
+    } else drawInteractiveView();
+  }, [drawInteractiveView]);
+
+  const commitInteractiveView = useCallback(() => {
+    if (interactiveFrameRef.current !== null) {
+      window.cancelAnimationFrame(interactiveFrameRef.current);
+      interactiveFrameRef.current = null;
+    }
+    setZoom(zoomRef.current);
+    setPan({ ...panRef.current });
     setHover(null);
-  }, []);
+    const renderer = mapRendererRef.current;
+    const rect = mapRef.current?.getBoundingClientRect();
+    if (renderer?.screenSpaceBorders && rect) {
+      const focusedRegionId = strategicTargetId ?? inspectedSectorId;
+      renderer.draw({ zoom: zoomRef.current, panX: panRef.current.x / Math.max(1, rect.width), panY: -panRef.current.y / Math.max(1, rect.height), selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1, selectedRegion: focusedRegionId === null ? 0 : focusedRegionId + 1 });
+    } else paintRef.current();
+  }, [inspectedSectorId, strategicTargetId]);
 
   const zoomBy = useCallback((delta: number) => {
     applyView(zoomRef.current + delta, panRef.current);
@@ -618,6 +668,11 @@ export default function Home() {
       setMapLabels([]);
     }
   }, [dataVersion, engine, inspectedSectorId, mapLabels.length, mapStyle, strategicTargetId]);
+
+  useEffect(() => { paintRef.current = paint; }, [paint]);
+  useEffect(() => () => {
+    if (interactiveFrameRef.current !== null) window.cancelAnimationFrame(interactiveFrameRef.current);
+  }, []);
 
   useEffect(() => {
     if (!engine || !mapRef.current) return;
@@ -841,7 +896,7 @@ export default function Home() {
     busyRef.current = true; setBusy(true); setBattleFx(null);
     try {
       const incomingBefore = new Set(engine.getStrategicCampaigns().filter(({ defenderId }) => defenderId === engine.playerCountryId).map(({ id }) => id));
-      const result = engine.advanceStrategicRound(targetRegionId);
+      const result = engine.advanceStrategicRound(targetRegionId, strategicCasusBelli);
       highlightRef.current = result.changedIndices;
       refresh(engine); autosave(engine); paint();
       const playerNeighbours = new Set<number>();
@@ -873,7 +928,7 @@ export default function Home() {
         ? `Twoja kampania: ${Math.round(playerCampaign.progress)}% · ${engine.getStrategicRegions()[playerCampaign.regionId]?.name}`
         : playerRecord?.text ?? latest?.text ?? "Runda strategiczna zakończona — wybierz kolejny cel");
     } finally { busyRef.current = false; setBusy(false); }
-  }, [autosave, engine, focusStrategicRegion, gameMode, notify, paint, refresh, strategicTargetId]);
+  }, [autosave, engine, focusStrategicRegion, gameMode, notify, paint, refresh, strategicCasusBelli, strategicTargetId]);
 
   const resolveCampaignConflict = useCallback((continueCampaign: boolean) => {
     if (!engine || busy) return;
@@ -1148,7 +1203,12 @@ export default function Home() {
 
   const pointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const gesture = gestureRef.current;
-    if (!gesture.points.size) { gesture.moved = false; gesture.hadMulti = false; }
+    if (!gesture.points.size) {
+      gesture.moved = false;
+      gesture.hadMulti = false;
+      const frame = mapRef.current?.getBoundingClientRect();
+      gesture.frame = frame ? { left: frame.left, top: frame.top, width: frame.width, height: frame.height } : null;
+    }
     gesture.points.set(event.pointerId, { x: event.clientX, y: event.clientY });
     gesture.last = { x: event.clientX, y: event.clientY };
     if (gesture.points.size >= 2) {
@@ -1174,21 +1234,25 @@ export default function Home() {
       gesture.points.set(event.pointerId, current);
       if (gesture.points.size === 1) {
         const dx = current.x - previous.x, dy = current.y - previous.y;
-        if (Math.abs(dx) + Math.abs(dy) > 1) gesture.moved = true;
-        if (zoomRef.current >= MIN_ZOOM) applyView(zoomRef.current, { x: panRef.current.x + dx, y: panRef.current.y + dy });
+        if (Math.abs(dx) + Math.abs(dy) > 1) {
+          gesture.moved = true;
+          mapRef.current?.classList.add("is-map-dragging");
+        }
+        if (zoomRef.current >= MIN_ZOOM) applyView(zoomRef.current, { x: panRef.current.x + dx, y: panRef.current.y + dy }, false);
         gesture.last = current;
       } else if (gesture.pinch) {
         const [first, second] = [...gesture.points.values()];
         const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
         const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
         const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, gesture.pinch.zoom * distance / gesture.pinch.distance));
-        const frame = mapRef.current?.getBoundingClientRect();
+        const frame = gesture.frame ?? mapRef.current?.getBoundingClientRect();
         const frameCenter = frame ? { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2 } : { x: 0, y: 0 };
         const scale = nextZoom / gesture.pinch.zoom;
+        mapRef.current?.classList.add("is-map-dragging");
         applyView(nextZoom, {
           x: center.x - frameCenter.x - scale * (gesture.pinch.center.x - frameCenter.x - gesture.pinch.pan.x),
           y: center.y - frameCenter.y - scale * (gesture.pinch.center.y - frameCenter.y - gesture.pinch.pan.y),
-        });
+        }, false);
         gesture.moved = true;
       }
       return;
@@ -1235,8 +1299,11 @@ export default function Home() {
       gesture.last = [...gesture.points.values()][0];
       gesture.pinch = null;
     } else if (!gesture.points.size) {
+      commitInteractiveView();
+      mapRef.current?.classList.remove("is-map-dragging");
       gesture.last = null;
       gesture.pinch = null;
+      gesture.frame = null;
       gesture.moved = false;
       gesture.hadMulti = false;
     }
@@ -1312,11 +1379,11 @@ export default function Home() {
       owner,
       originalOwner,
       strength: engine.getStrategicStrength(region.ownerId),
-      assessment: engine.getStrategicWarAssessment(playerCountryId, region.ownerId, region.id),
+      assessment: engine.getStrategicWarPreview(playerCountryId, region.ownerId, region.id, strategicCasusBelli),
       resistance: engine.getStrategicRegionResistance(region.id),
       occupation: strategicOccupations.find(({ regionId, ownerId }) => regionId === region.id && ownerId === region.ownerId),
     };
-  }, [engine, playerCountryId, strategicOccupations, strategicRegions, strategicTargetId]);
+  }, [engine, playerCountryId, strategicCasusBelli, strategicOccupations, strategicRegions, strategicTargetId]);
   const playerOccupations = useMemo(() => playerCountryId === null ? [] : strategicOccupations.filter(({ ownerId, progress }) => ownerId === playerCountryId && progress < 100), [playerCountryId, strategicOccupations]);
   const selectedDossier = useMemo(() => {
     if (!engine || gameMode !== "strategy" || !selected) return null;
@@ -1345,7 +1412,10 @@ export default function Home() {
     const borderPolicy = engine.getCountryBorderPolicy(countryId);
     const assimilationProgress = playerOccupations.find(o => strategicRegions[o.regionId]?.ownerId === countryId)?.progress ?? 0;
     const playerPolicyState = playerCountryId === countryId ? engine.getPlayerPolicyState() : null;
-    return { countryId, regions, provinceCount, strength, outgoing, incoming, occupations, attackableRegions, assessment, capabilityChanges, manpower, countryLogistics, maritimeTrade, regionLogistics, regimeType, informationEnvironment, combatExperience, demographics, demographicType, populationAbsolute, refugeesHosted, refugeeComposition, borderPolicy, assimilationProgress, playerPolicyState };
+    const resources = engine.getStrategicResourceSecurity(countryId);
+    const politics = engine.getStrategicPoliticalState(countryId);
+    const objectives = engine.getStrategicObjectives(countryId);
+    return { countryId, regions, provinceCount, strength, outgoing, incoming, occupations, attackableRegions, assessment, capabilityChanges, manpower, countryLogistics, maritimeTrade, regionLogistics, regimeType, informationEnvironment, combatExperience, demographics, demographicType, populationAbsolute, refugeesHosted, refugeeComposition, borderPolicy, assimilationProgress, playerPolicyState, resources, politics, objectives };
   }, [engine, gameMode, playerCountryId, selected, strategicCampaigns, strategicOccupations, strategicRegions, strategicTargets, dataVersion, playerOccupations]);
   const playerDossier = useMemo(() => {
     if (!engine || gameMode !== "strategy" || playerCountryId === null) return null;
@@ -1373,8 +1443,16 @@ export default function Home() {
     const assimilationProgress = playerOccupations.find(o => strategicRegions[o.regionId]?.ownerId === countryId)?.progress ?? 0;
     const playerPolicyState = engine.getPlayerPolicyState();
     const attackableRegions = playerCountryId === countryId ? strategicTargets.filter(({ ownerId }) => ownerId !== countryId) : [];
-    return { countryId, regions, provinceCount, strength, outgoing, incoming, occupations, attackableRegions, assessment: null, capabilityChanges, manpower, countryLogistics, maritimeTrade, regionLogistics, regimeType, informationEnvironment, combatExperience, demographics, demographicType, populationAbsolute, refugeesHosted, refugeeComposition, borderPolicy, assimilationProgress, playerPolicyState };
-  }, [engine, gameMode, playerCountryId, strategicCampaigns, strategicOccupations, strategicRegions, dataVersion, playerOccupations]);
+    const resources = engine.getStrategicResourceSecurity(countryId);
+    const politics = engine.getStrategicPoliticalState(countryId);
+    const objectives = engine.getStrategicObjectives(countryId);
+    return { countryId, regions, provinceCount, strength, outgoing, incoming, occupations, attackableRegions, assessment: null, capabilityChanges, manpower, countryLogistics, maritimeTrade, regionLogistics, regimeType, informationEnvironment, combatExperience, demographics, demographicType, populationAbsolute, refugeesHosted, refugeeComposition, borderPolicy, assimilationProgress, playerPolicyState, resources, politics, objectives };
+  }, [engine, gameMode, playerCountryId, strategicCampaigns, strategicOccupations, strategicRegions, strategicTargets, dataVersion, playerOccupations]);
+  const changeOccupationPolicy = useCallback((regionId: number, policy: StrategicOccupationPolicyChoice) => {
+    if (!engine || busy || !engine.setStrategicOccupationPolicy(regionId, policy)) return;
+    refresh(engine); autosave(engine); paint();
+    notify(policy === "withdrawal" ? "Wycofano się z okupowanego sektora." : `Zmieniono model okupacji: ${STRATEGIC_OCCUPATION_POLICIES[policy].name}.`);
+  }, [autosave, busy, engine, notify, paint, refresh]);
   const changeDefensePosture = useCallback((posture: StrategicDefensePosture, focusRegionId: number | null = null) => {
     if (!engine || busy) return;
     const selectedFocus = posture === "sector" ? focusRegionId ?? incomingCampaigns[0]?.regionId ?? null : null;
@@ -1565,6 +1643,9 @@ export default function Home() {
               <nav className="dossier-tabs">{(selectedDossier.countryId === playerCountryId ? PLAYER_TABS : OBSERVER_TABS).map((tab) => <button key={tab} type="button" className={dossierTab === tab ? "active" : ""} onClick={() => setDossierTab(tab)}>{tabLabels[tab]}</button>)}</nav>
               {dossierTab === "economy" && selectedDossier.strength && <section className="dossier-strength"><div><small>POTENCJAŁ <InfoTip>Łączna ocena możliwości państwa w skali 0–100. Łączy gospodarkę, ludność, technologię, logistykę, wojsko i instytucje.</InfoTip></small><strong>{selectedDossier.strength.rating}<i>/100</i></strong><em>{selectedDossier.strength.tier}</em></div><div><small>RANKING POTENCJAŁU <InfoTip>Miejsce tego kraju w rankingu wszystkich aktywnych państw według tej samej skali.</InfoTip></small><strong>#{selectedDossier.strength.rank || "—"}</strong><em>z {selectedDossier.strength.activeCountries}</em></div><div><small>WYNIK MODELU <InfoTip>Surowy wynik modelu przed zaokrągleniem do widocznej skali 0–100.</InfoTip></small><strong>{Math.round(selectedDossier.strength.power)}</strong><em>baza 2021 + stan gry</em></div></section>}
               {dossierTab === "economy" && <section className="capacity-breakdown"><header><b>MOŻLIWOŚCI PAŃSTWA</b><span>0–100</span></header><div>{Object.entries(selectedDossier.strength.components).map(([key, value]) => { const component = key as keyof typeof componentLabels; const v = Math.max(0, Math.min(100, value)); const tip = selectedDossier.countryId === playerCountryId ? playerCapabilityAdvice[component] : capabilityTooltips[component]; return <span key={key}><small>{componentLabels[component]} <InfoTip>{tip}</InfoTip></small><b>{Math.round(v)}</b><i><em style={{ width: `${Math.min(100, v)}%` }} /></i></span>; })}</div><footer><span>Wyczerpanie wojenne <b>{Math.round(selectedDossier.strength.exhaustion)}%</b></span><span>Integracja zdobyczy <b>{Math.round(selectedDossier.strength.integration)}%</b></span></footer></section>}
+              {dossierTab === "economy" && <section className="resource-security"><header><b>BEZPIECZEŃSTWO ZASOBÓW</b><span>gotowość <b>{Math.round(selectedDossier.resources.readiness)}/100</b></span></header><div>{(["energy", "industry", "food", "technology", "logistics"] as const).map((key) => <span key={key} className={selectedDossier.resources.bottleneck === key ? "bottleneck" : ""}><small>{key === "energy" ? "Energia" : key === "industry" ? "Przemysł" : key === "food" ? "Żywność" : key === "technology" ? "Technologie" : "Transport"}</small><b>{Math.round(selectedDossier.resources[key])}</b><i><em style={{ width: `${selectedDossier.resources[key]}%` }} /></i></span>)}</div><footer>Wąskie gardło: <b>{selectedDossier.resources.bottleneck === "energy" ? "energia" : selectedDossier.resources.bottleneck === "industry" ? "przemysł" : selectedDossier.resources.bottleneck === "food" ? "żywność" : selectedDossier.resources.bottleneck === "technology" ? "technologie" : "transport"}</b>. Najsłabsze zasoby ograniczają ofensywę.</footer></section>}
+              {dossierTab === "overview" && <section className="political-balance"><header><b>MANDAT I REPUTACJA</b><span>skutki działań utrzymują się w czasie</span></header><div><span><small>Legitymizacja</small><b>{Math.round(selectedDossier.politics.legitimacy)}</b></span><span><small>Reputacja</small><b>{Math.round(selectedDossier.politics.reputation)}</b></span><span><small>Poparcie wojny</small><b>{Math.round(selectedDossier.politics.warSupport)}</b></span></div></section>}
+              {dossierTab === "overview" && <section className="strategic-objectives"><header><b>CELE PAŃSTWA</b><span>{selectedDossier.objectives.filter((objective) => objective.completed).reduce((sum, objective) => sum + objective.points, 0)}/100 pkt</span></header>{selectedDossier.objectives.map((objective) => <div key={objective.id} className={objective.completed ? "completed" : ""}><span><b>{objective.name}</b><small>{objective.description}</small></span><strong>{objective.completed ? `✓ ${objective.points} pkt` : `${Math.round(objective.progress)}%`}</strong><i><em style={{ width: `${objective.progress}%` }} /></i></div>)}</section>}
               {dossierTab === "overview" && selectedDossier.capabilityChanges.length > 0 && <section className="capability-changes"><header><b>ZMIANY POTENCJAŁU</b> <span>ostatnia tura</span></header><div>{selectedDossier.capabilityChanges.map((item) => <span key={item.key} className={`capability-change ${item.trend}`}><small>{item.label} <InfoTip>{`${capabilityTooltips[item.key as keyof typeof componentLabels]} Wartość duża to mocniejszy zasób, a liczba ze znakiem pokazuje zmianę w ostatnim kwartale.`}</InfoTip></small><b>{item.value}</b><strong>{item.delta}</strong></span>)}</div><footer>{selectedDossier.countryId === playerCountryId ? <span>Dane własne <b>pełne</b> <InfoTip>Własne ministerstwa i służby przekazują pełne dane o kraju gracza.</InfoTip></span> : <span>Pewność danych <b>{Math.round((1 - (engine?.getCountryCapabilityState(selectedDossier.countryId)?.uncertainty ?? 0)) * 100)}%</b> <InfoTip>Szacunek wiarygodności informacji o obcym państwie. Startuje od 57–82%, zależnie od kraju, a potem spada przy dużych zmianach granic i z upływem tur. Wyższa wartość oznacza lepsze rozpoznanie.</InfoTip></span>}<span>Każdy wskaźnik zmienia się we własnym tempie. <InfoTip>Zmiana jednego zasobu nie oznacza automatycznie zmiany wszystkich pozostałych.</InfoTip></span></footer></section>}
               {dossierTab === "population" && <section className="population-dossier">
                 <div><small>LUDNOŚĆ BEZWZGLĘDNA</small><strong>{Math.round(selectedDossier.populationAbsolute ?? 0).toLocaleString("pl-PL")} osób</strong></div>
@@ -1579,7 +1660,7 @@ export default function Home() {
               {dossierTab === "military" && selectedDossier.attackableRegions.length > 0 && <section className="dossier-targets"><header><b>DOSTĘPNE CELE</b><span>{selectedDossier.attackableRegions.length}</span></header>{selectedDossier.attackableRegions.map((region) => <button key={region.id} onClick={() => selectStrategicTarget(region.id)}><span>{region.name}</span><b>{formatArea(region.areaKm2)}</b><i>WYBIERZ I POKAŻ →</i></button>)}</section>}
               {dossierTab === "military" && <section className="dossier-regions"><header><b>SEKTORY TERENOWE I OBRONA</b><span>{selectedDossier.regions.length}</span></header><small>To te same jednostki terenu, które zakładka Logistyka nazywa regionami. Kliknięcie zawsze pokazuje ten sam obszar na mapie.</small><div>{selectedDossier.regions.map((region) => <button key={region.id} className={inspectedSectorId === region.id ? "active" : ""} onClick={() => { setInspectedSectorId(region.id); focusStrategicRegion(region.id); }}><span>{region.name}</span><b>{formatArea(region.areaKm2)}</b></button>)}</div></section>}
               {dossierTab === "logistics" && <section className="logistics-dossier"><div><small>INDEKS LOGISTYCZNY <InfoTip>Ocena sprawności transportu i zaopatrzenia w skali 0–100. Uwzględnia porty, kolej, drogi, połączenia lotnicze i inwestycje.</InfoTip></small><strong>{typeof selectedDossier.countryLogistics === "number" ? Math.round(selectedDossier.countryLogistics) : "—"}</strong><em>/100</em></div><div><span><small>WPŁYW NA GOSPODARKĘ <InfoTip>Infrastruktura wpływa na potencjał logistyczny i zaopatrzenie. Gra nie nalicza osobnego, stałego bonusu do gospodarki za przekroczenie progu indeksu.</InfoTip></small><b>{"pośredni"}</b></span><span><small>WPŁYW NA REZERWY <InfoTip>Liczba rezerw zależy od ludności i mobilizacji. Logistyka wpływa na możliwości wykorzystania sił, ale nie odejmuje bezpośrednio ludzi z rezerw.</InfoTip></small><b>{"brak bezpośredniego"}</b></span></div><details><summary>{(selectedDossier.regionLogistics ?? []).length} regionów <InfoTip>Region logistyczny jest tym samym sektorem terenowym widocznym w Wojsku. Kliknij nazwę, aby go zaznaczyć i przybliżyć na mapie.</InfoTip></summary><div className="logistics-regions">{(selectedDossier.regionLogistics ?? []).map((item) => <button key={item.regionId} className={inspectedSectorId === item.regionId ? "active" : ""} onClick={() => { setInspectedSectorId(item.regionId); focusStrategicRegion(item.regionId); }}><small>{strategicRegions[item.regionId]?.name ?? `Region ${item.regionId}`} <InfoTip>Indeks sektora łączy wszystkie widoczne niżej elementy infrastruktury.</InfoTip></small><b>{Math.round(item.logisticsIndex)}</b><small>porty {item.portCount} <InfoTip>Początkowe porty pochodzą z Natural Earth; liczba uwzględnia też porty wybudowane w rozgrywce. Porty są najważniejszym elementem handlu morskiego.</InfoTip> · kolej {Math.round(item.railDensity)}/100 <InfoTip>Poziom sieci kolejowej, nie liczba kilometrów. Modernizacja kolei podnosi go w wybranym sektorze, wojna i utrata sektora odbierają jego korzyści.</InfoTip> · drogi {Math.round(item.roadDensity)}/100 <InfoTip>Poziom sieci drogowej, nie liczba kilometrów. Modernizacja dróg podnosi go w wybranym sektorze, a wojna może ograniczyć dostępne zaplecze.</InfoTip> · lotniska {item.airportCount} <InfoTip>Początkowa liczba średnich i dużych lotnisk pochodzi z OurAirports; w rozgrywce uwzględnia też ukończone budowy. Ukończona rozbudowa dodaje jedno lotnisko w tym regionie.</InfoTip></small></button>)}</div></details></section>}
-              {dossierTab === "policies" && selectedDossier.playerPolicyState && <section className="policy-dossier"><header><b>DECYZJE PREZYDENTA</b><span>punkty decyzyjne: <b className="policy-points">{selectedDossier.playerPolicyState!.decisionPoints}</b></span></header><div className="policy-list">{(engine ? engine.getAvailablePlayerPolicies(selectedDossier.countryId) : []).length ? (engine ? engine.getAvailablePlayerPolicies(selectedDossier.countryId) : []).map((policy) => { const isRegional = ["build-port", "modernize-roads", "expand-airport", "rail-upgrade", "fortify-sector"].includes(policy.id); const regionOptions = isRegional ? (selectedDossier.regions ?? []).filter((r) => r.ownerId === selectedDossier.countryId && (policy.id !== "build-port" || r.maritimeAccess > 0)) : []; return <div key={policy.id} className="policy-item"><div><small>{policy.name}</small><b>{policy.cost} PD · {policy.cooldown} kw. cooldown</b><small>{policy.description}</small></div>{isRegional && regionOptions.length ? <select disabled={busy || selectedDossier.playerPolicyState!.decisionPoints < policy.cost} onChange={(event) => { if (engine && event.target.value) { engine.activateLogisticsPolicy(policy.id, Number(event.target.value)); refresh(engine); autosave(engine); notify(`Inwestycja: ${policy.name}`); } }}><option value="">Wybierz region...</option>{regionOptions.map((r) => <option key={r.id} value={r.id}>{r.name} · {Math.round(r.areaKm2 ?? 0)} km²</option>)}</select> : <button disabled={busy || selectedDossier.playerPolicyState!.decisionPoints < policy.cost} onClick={() => { if (engine && engine.activatePlayerPolicy(policy.id)) { refresh(engine); autosave(engine); notify(`Aktywowano: ${policy.name}`); } }}>Wykonaj</button>}</div>; }) : <small>Brak dostępnych aktów w tej turze.</small>}</div><footer>{(engine ? engine.getCountryLogisticsInvestments(selectedDossier.countryId) : []).length ? <div><small>Aktywne inwestycje:</small>{(engine ? engine.getCountryLogisticsInvestments(selectedDossier.countryId) : []).slice(0, 4).map((inv) => <span key={inv.id}><b>{inv.type}</b><small>{strategicRegions[inv.regionId]?.name ?? `Region ${inv.regionId}`}</small><small>poz. {inv.remainingTurns} kw.</small></span>)}</div> : <span>Brak aktywnych inwestycji.</span>}</footer></section>}
+              {dossierTab === "policies" && selectedDossier.playerPolicyState && <section className="policy-dossier"><header><b>DECYZJE PREZYDENTA</b><span>punkty decyzyjne: <b className="policy-points">{selectedDossier.playerPolicyState!.decisionPoints}</b></span></header><div className="policy-list">{(engine ? engine.getAvailablePlayerPolicies(selectedDossier.countryId) : []).length ? (engine ? engine.getAvailablePlayerPolicies(selectedDossier.countryId) : []).map((policy) => { const isRegional = ["build-port", "modernize-roads", "expand-airport", "rail-upgrade", "fortify-sector"].includes(policy.id); const regionOptions = isRegional ? (selectedDossier.regions ?? []).filter((r) => r.ownerId === selectedDossier.countryId && (policy.id !== "build-port" || r.maritimeAccess > 0)) : []; const preview = engine?.getPlayerPolicyPreview(policy.id); return <div key={policy.id} className="policy-item"><div><small>{policy.name}</small><b>{policy.cost} PD · {policy.cooldown} kw. cooldown</b><small>{policy.description}</small>{preview && <small className="decision-preview">Po wykonaniu: {preview.summary}</small>}</div>{isRegional && regionOptions.length ? <select disabled={busy || selectedDossier.playerPolicyState!.decisionPoints < policy.cost} onChange={(event) => { if (engine && event.target.value) { engine.activateLogisticsPolicy(policy.id, Number(event.target.value)); refresh(engine); autosave(engine); notify(`Inwestycja: ${policy.name}`); } }}><option value="">Wybierz region...</option>{regionOptions.map((r) => <option key={r.id} value={r.id}>{r.name} · {Math.round(r.areaKm2 ?? 0)} km²</option>)}</select> : <button disabled={busy || selectedDossier.playerPolicyState!.decisionPoints < policy.cost} onClick={() => { if (engine && engine.activatePlayerPolicy(policy.id)) { refresh(engine); autosave(engine); notify(`Aktywowano: ${policy.name}`); } }}>Wykonaj</button>}</div>; }) : <small>Brak dostępnych aktów w tej turze.</small>}</div><footer>{(engine ? engine.getCountryLogisticsInvestments(selectedDossier.countryId) : []).length ? <div><small>Aktywne inwestycje:</small>{(engine ? engine.getCountryLogisticsInvestments(selectedDossier.countryId) : []).slice(0, 4).map((inv) => <span key={inv.id}><b>{inv.type}</b><small>{strategicRegions[inv.regionId]?.name ?? `Region ${inv.regionId}`}</small><small>poz. {inv.remainingTurns} kw.</small></span>)}</div> : <span>Brak aktywnych inwestycji.</span>}</footer></section>}
               {dossierTab === "military" && inspectedSectorId !== null && (() => { const sector = strategicRegions[inspectedSectorId]; const ownerId = sector?.ownerId ?? selectedDossier.countryId; const owner = engine?.getCountry(ownerId); const regionLogistics = engine?.getRegionLogistics(inspectedSectorId); const defense = engine?.getStrategicRegionResistance(inspectedSectorId); const terrain = engine?.getStrategicRegionTerrain(inspectedSectorId); const profile = engine?.getStrategicRegionDefenseProfile(inspectedSectorId); return <section className="sector-detail"><header><b>{sector?.name ?? `Sektor ${inspectedSectorId}`}</b><span>{owner?.flag} {owner?.name ?? "—"}</span></header><div><span><small>Obrona <InfoTip>Łączy wielkość sektora, teren i poziom umocnień. Wyższa wartość spowalnia atakującego.</InfoTip></small><b>{defense?.label ?? "—"}</b></span><span><small>Teren <InfoTip>Rzeźba terenu wpływa na tempo marszu, rozpoznanie i liczbę dogodnych osi natarcia.</InfoTip></small><b>{terrain?.label ?? "—"}</b></span><span><small>Umocnienia <InfoTip>Stałe przygotowanie obronne sektora. Możesz je podnosić decyzją „Przygotuj umocnienia” w zakładce Decyzje.</InfoTip></small><b>{profile ? `${profile.fortification}/100` : "—"}</b><i>{profile?.fortificationLabel}</i></span><span><small>Logistyka <InfoTip>Określa sprawność dowozu ludzi, amunicji i paliwa do sektora.</InfoTip></small><b>{typeof regionLogistics === "number" ? Math.round(regionLogistics) : "—"}</b></span></div><footer><p><b>Przeszkoda dla atakującego:</b> {profile?.naturalObstacle ?? terrain?.description ?? ""}. {profile?.attackerBrief ?? ""}</p><p><b>Źródło umocnień:</b> {profile?.source ?? "—"}</p><p>{formatArea(sector?.areaKm2 ?? 0)}. {sector?.provinceNames.length ? sector.provinceNames.join(" · ") : ""}</p></footer></section>; })()}
             </aside>}
             {hover && <div className="map-tooltip" style={{ left: hover.x, top: hover.y }}><span>{hover.country.flag}</span><strong>{hover.country.name}</strong>{gameMode === "war" && warTitle(hover.country.id) && <em className="country-title">{warTitle(hover.country.id)}</em>}</div>}
@@ -1613,11 +1694,13 @@ export default function Home() {
                 return <section className="policy-card"><header><b>DECYZJE PREZYDENTA</b><span>punkty decyzyjne: <b className="policy-points">{policyState.decisionPoints}</b></span></header><div className="policy-list">{policies.length ? policies.map((policy) => {
                   const isRegional = ["build-port", "modernize-roads", "expand-airport", "rail-upgrade", "fortify-sector"].includes(policy.id);
                   const regionOptions = isRegional ? countryRegions.filter((r) => policy.id === "build-port" ? r.maritimeAccess > 0 : true) : [];
-                  return <div key={policy.id} className="policy-item"><div><small>{policy.name}</small><b>{policy.cost} PD · {policy.cooldown} kw. cooldown</b><small>{policy.description}</small></div>{isRegional && regionOptions.length ? <select disabled={busy || policyState.decisionPoints < policy.cost} onChange={(event) => { if (engine && event.target.value) { engine.activateLogisticsPolicy(policy.id, Number(event.target.value)); refresh(engine); autosave(engine); notify(`Inwestycja: ${policy.name}`); } }}><option value="">Wybierz region...</option>{regionOptions.map((r) => <option key={r.id} value={r.id}>{r.name} · {Math.round(r.areaKm2 ?? 0)} km²</option>)}</select> : <button disabled={busy || policyState.decisionPoints < policy.cost} onClick={() => { if (engine && engine.activatePlayerPolicy(policy.id)) { refresh(engine); autosave(engine); notify(`Aktywowano: ${policy.name}`); } }}>Wykonaj</button>}</div>;
+                  const preview = engine?.getPlayerPolicyPreview(policy.id);
+                  return <div key={policy.id} className="policy-item"><div><small>{policy.name}</small><b>{policy.cost} PD · {policy.cooldown} kw. cooldown</b><small>{policy.description}</small>{preview && <small className="decision-preview">Po wykonaniu: {preview.summary}</small>}</div>{isRegional && regionOptions.length ? <select disabled={busy || policyState.decisionPoints < policy.cost} onChange={(event) => { if (engine && event.target.value) { engine.activateLogisticsPolicy(policy.id, Number(event.target.value)); refresh(engine); autosave(engine); notify(`Inwestycja: ${policy.name}`); } }}><option value="">Wybierz region...</option>{regionOptions.map((r) => <option key={r.id} value={r.id}>{r.name} · {Math.round(r.areaKm2 ?? 0)} km²</option>)}</select> : <button disabled={busy || policyState.decisionPoints < policy.cost} onClick={() => { if (engine && engine.activatePlayerPolicy(policy.id)) { refresh(engine); autosave(engine); notify(`Aktywowano: ${policy.name}`); } }}>Wykonaj</button>}</div>;
                 }) : <small>Brak dostępnych aktów w tej turze.</small>}</div><footer>{investments.length ? <div><small>Aktywne inwestycje:</small>{investments.slice(0, 4).map((inv) => <span key={inv.id}><b>{inv.type}</b><small>{strategicRegions[inv.regionId]?.name ?? `Region ${inv.regionId}`}</small><small>poz. {inv.remainingTurns} kw.</small></span>)}</div> : <span>Brak aktywnych inwestycji.</span>}</footer></section>;
               })()}
             </div>
-            {playerOccupations.length > 0 && <section className="occupation-list"><header><b>ASYMILACJA ZDOBYCZY</b><span>{playerOccupations.length} równocześnie · wolniej</span></header>{playerOccupations.map((occupation) => <div key={occupation.regionId}><span>{strategicRegions[occupation.regionId]?.name}</span><b>{Math.round(occupation.progress)}%</b><i><em style={{ width: `${occupation.progress}%` }} /></i><small>{occupation.progress < 30 ? <span style={{ color: "var(--red)" }}>Wczesna integracja: zasoby regionu są dostępne tylko częściowo.</span> : <span style={{ color: "var(--teal)" }}>{occupation.progress >= 100 ? "Pełna integracja" : "Integracja trwa, dostępność zasobów rośnie"}</span>}</small></div>)}</section>}
+            {!selectedDossier && playerDossier && <section className="strategic-dashboard"><div className="politics-summary"><b>MANDAT</b><span>Legitymizacja <strong>{Math.round(playerDossier.politics.legitimacy)}</strong></span><span>Reputacja <strong>{Math.round(playerDossier.politics.reputation)}</strong></span><span>Poparcie wojny <strong>{Math.round(playerDossier.politics.warSupport)}</strong></span></div><div className="resources-summary"><b>ZASOBY · GOTOWOŚĆ {Math.round(playerDossier.resources.readiness)}</b>{(["energy", "industry", "food", "technology", "logistics"] as const).map((key) => <span key={key} className={playerDossier.resources.bottleneck === key ? "bottleneck" : ""}><small>{key === "energy" ? "Energia" : key === "industry" ? "Przemysł" : key === "food" ? "Żywność" : key === "technology" ? "Technologie" : "Transport"}</small><strong>{Math.round(playerDossier.resources[key])}</strong></span>)}</div><div className="objectives-summary"><b>CELE PAŃSTWA</b>{playerDossier.objectives.map((objective) => <span key={objective.id} className={objective.completed ? "completed" : ""}><small>{objective.name}</small><strong>{objective.completed ? `✓ ${objective.points}` : `${Math.round(objective.progress)}%`}</strong></span>)}</div></section>}
+            {playerOccupations.length > 0 && <section className="occupation-list"><header><b>ZARZĄDZANIE ZDOBYCZAMI</b><span>{playerOccupations.length} równocześnie · koszt administracyjny rośnie</span></header>{playerOccupations.map((occupation) => { const currentPolicy = occupation.policy ?? "annexation"; return <div key={occupation.regionId}><span>{strategicRegions[occupation.regionId]?.name}</span><b>{Math.round(occupation.progress)}%</b><i><em style={{ width: `${occupation.progress}%` }} /></i><small>{STRATEGIC_OCCUPATION_POLICIES[currentPolicy].description}</small><label><small>Model okupacji</small><select value={currentPolicy} disabled={busy} onChange={(event) => changeOccupationPolicy(occupation.regionId, event.target.value as StrategicOccupationPolicyChoice)}>{(Object.entries(STRATEGIC_OCCUPATION_POLICIES) as Array<[Exclude<StrategicOccupationPolicyChoice, "withdrawal">, (typeof STRATEGIC_OCCUPATION_POLICIES)["annexation"]]>).map(([id, item]) => <option key={id} value={id}>{item.name} · {Math.round(item.resourceCeiling * 100)}% zasobów</option>)}</select></label><button type="button" disabled={busy} onClick={() => changeOccupationPolicy(occupation.regionId, "withdrawal")}>Wycofaj administrację i oddaj sektor</button></div>; })}</section>}
             {incomingCampaigns.length > 0 && <section className="defense-alert" role="alert">
               <header><span>⚠</span><div><b>{playerCountry?.name?.toUpperCase()} JEST ATAKOWANA</b><small>{incomingCampaigns.length === 1 ? "1 wroga kampania" : `${incomingCampaigns.length} wrogie kampanie`}</small></div></header>
               {incomingCampaigns.map((campaign) => <div key={campaign.id}><span>{engine?.getCountry(campaign.attackerId)?.flag} {engine?.getCountry(campaign.attackerId)?.name}</span><strong>{strategicRegions[campaign.regionId]?.name}</strong><b>{Math.round(campaign.progress)}%</b></div>)}
@@ -1635,8 +1718,8 @@ export default function Home() {
               <p>{engine?.getCountry(playerCampaignConflict.campaign.defenderId)?.flag} {engine?.getCountry(playerCampaignConflict.campaign.defenderId)?.name} utracił ten region. Obecny właściciel to {engine?.getCountry(playerCampaignConflict.currentDefenderId)?.flag} {engine?.getCountry(playerCampaignConflict.currentDefenderId)?.name}.</p>
               <small>Kontynuacja zachowa 70% obecnego postępu i rozpocznie wojnę z nowym właścicielem.</small>
               <div><button onClick={() => resolveCampaignConflict(true)}>⚔ Kontynuuj atak</button><button onClick={() => resolveCampaignConflict(false)}>Wycofaj wojska</button></div>
-            </div> : playerCampaign ? <div className="campaign-card active"><header><span>⚔ AKTYWNA KAMPANIA</span><b>{Math.round(playerCampaign.progress)}%</b></header><strong>{strategicRegions[playerCampaign.regionId]?.name}</strong><small>Przeciwnik: {engine?.getCountry(playerCampaign.defenderId)?.flag} {engine?.getCountry(playerCampaign.defenderId)?.name} · {strategicRegions[playerCampaign.regionId]?.provinceCount ?? 1} prow. · kwartał kampanii {playerCampaign.turns + 1} · siła przeciwnika {engine?.getStrategicStrength(playerCampaign.defenderId).rating}/100</small>{playerCampaign.lastRandomFactor && <small className="campaign-roll">Ostatni kwartał: los ×{playerCampaign.lastRandomFactor.toFixed(2)} · zmiana frontu {playerCampaign.lastMomentum! >= 0 ? "+" : ""}{playerCampaign.lastMomentum?.toFixed(1)} pkt</small>}<div><i style={{ width: `${playerCampaign.progress}%` }} /></div></div> : <><label className="strategy-target"><span>CEL NOWEJ KAMPANII</span><select value={strategicTargetId ?? ""} onChange={(event) => selectStrategicTarget(event.target.value ? Number(event.target.value) : null)}><option value="">Bez nowej wojny w tym kwartale</option>{strategicTargets.map((region) => <option key={region.id} value={region.id}>{engine?.getCountry(region.ownerId)?.flag} {region.name} · {region.provinceCount} prow. · siła {engine?.getStrategicStrength(region.ownerId).rating}/100 · {formatArea(region.areaKm2)}</option>)}</select><small>Wybranie celu automatycznie pokazuje go na mapie. Można atakować sektor lądowo sąsiedni albo położony do 500 km przez nieprzerwane morze.</small></label>
-            {selectedTargetDetails && <section className={`target-intelligence ${selectedTargetDetails.assessment.level}`}><header><span>ROZPOZNANIE CELU</span><b>{selectedTargetDetails.assessment.chance}% SZANS</b></header><h3>{selectedTargetDetails.region.name}</h3><p>{selectedTargetDetails.owner?.flag} Kontrola: <b>{selectedTargetDetails.owner?.name}</b>{selectedTargetDetails.originalOwner?.id !== selectedTargetDetails.owner?.id ? ` · historycznie w grze: ${selectedTargetDetails.originalOwner?.name}` : ""}</p><div><span><small>Powierzchnia</small><b>{formatArea(selectedTargetDetails.region.areaKm2)}</b></span><span><small>Prowincje</small><b>{selectedTargetDetails.region.provinceCount}</b></span><span><small>Opór sektora</small><b>{selectedTargetDetails.resistance.label} ×{selectedTargetDetails.resistance.factor.toFixed(2)}</b></span><span><small>Potencjał obrońcy</small><b>{selectedTargetDetails.strength.rating}/100</b></span></div><strong>{selectedTargetDetails.assessment.label}</strong>{selectedTargetDetails.occupation && <em>Integracja obecnego właściciela: {Math.round(selectedTargetDetails.occupation.progress)}%</em>}<small>{selectedTargetDetails.region.provinceNames.join(" · ")}</small></section>}</>}
+            </div> : playerCampaign ? <div className="campaign-card active"><header><span>⚔ AKTYWNA KAMPANIA</span><b>{Math.round(playerCampaign.progress)}%</b></header><strong>{strategicRegions[playerCampaign.regionId]?.name}</strong><small>Przeciwnik: {engine?.getCountry(playerCampaign.defenderId)?.flag} {engine?.getCountry(playerCampaign.defenderId)?.name} · {strategicRegions[playerCampaign.regionId]?.provinceCount ?? 1} prow. · kwartał kampanii {playerCampaign.turns + 1} · siła przeciwnika {engine?.getStrategicStrength(playerCampaign.defenderId).rating}/100</small><small>Uzasadnienie: {STRATEGIC_CASUS_BELLI[playerCampaign.casusBelli ?? "security-threat"].name}</small>{playerCampaign.lastRandomFactor && <small className="campaign-roll">Ostatni kwartał: los ×{playerCampaign.lastRandomFactor.toFixed(2)} · zmiana frontu {playerCampaign.lastMomentum! >= 0 ? "+" : ""}{playerCampaign.lastMomentum?.toFixed(1)} pkt</small>}<div><i style={{ width: `${playerCampaign.progress}%` }} /></div></div> : <><label className="strategy-target"><span>CEL NOWEJ KAMPANII</span><select value={strategicTargetId ?? ""} onChange={(event) => selectStrategicTarget(event.target.value ? Number(event.target.value) : null)}><option value="">Bez nowej wojny w tym kwartale</option>{strategicTargets.map((region) => <option key={region.id} value={region.id}>{engine?.getCountry(region.ownerId)?.flag} {region.name} · {region.provinceCount} prow. · siła {engine?.getStrategicStrength(region.ownerId).rating}/100 · {formatArea(region.areaKm2)}</option>)}</select><small>Wybranie celu automatycznie pokazuje go na mapie. Można atakować sektor lądowo sąsiedni albo położony do 500 km przez nieprzerwane morze.</small></label><label className="casus-belli"><span>UZASADNIENIE WOJNY</span><select value={strategicCasusBelli} onChange={(event) => setStrategicCasusBelli(event.target.value as StrategicCasusBelliId)}>{Object.values(STRATEGIC_CASUS_BELLI).map((casus) => <option key={casus.id} value={casus.id}>{casus.name}</option>)}</select><small>{STRATEGIC_CASUS_BELLI[strategicCasusBelli].description}</small></label>
+            {selectedTargetDetails && <section className={`target-intelligence ${selectedTargetDetails.assessment.level}`}><header><span>ROZPOZNANIE I SKUTKI DECYZJI</span><b>{selectedTargetDetails.assessment.chance}% SZANS</b></header><h3>{selectedTargetDetails.region.name}</h3><p>{selectedTargetDetails.owner?.flag} Kontrola: <b>{selectedTargetDetails.owner?.name}</b>{selectedTargetDetails.originalOwner?.id !== selectedTargetDetails.owner?.id ? ` · historycznie w grze: ${selectedTargetDetails.originalOwner?.name}` : ""}</p><div><span><small>Opór sektora</small><b>{selectedTargetDetails.resistance.label} ×{selectedTargetDetails.resistance.factor.toFixed(2)}</b></span><span><small>Gotowość zasobowa</small><b>{Math.round(selectedTargetDetails.assessment.resourceReadiness)}/100</b></span><span><small>Zaufanie → po decyzji</small><b>{Math.round(selectedTargetDetails.assessment.relationBefore.trust)} → {Math.round(selectedTargetDetails.assessment.relationAfter.trust)}</b></span><span><small>Napięcie → po decyzji</small><b>{Math.round(selectedTargetDetails.assessment.relationBefore.tension)} → {Math.round(selectedTargetDetails.assessment.relationAfter.tension)}</b></span></div><strong>{selectedTargetDetails.assessment.label}</strong><p className="decision-consequences">Po rozpoczęciu wojny: {selectedTargetDetails.assessment.consequences.join(" · ")}.</p>{selectedTargetDetails.occupation && <em>Integracja obecnego właściciela: {Math.round(selectedTargetDetails.occupation.progress)}%</em>}<small>{selectedTargetDetails.region.provinceNames.join(" · ")}</small></section>}</>}
             <div className="campaign-overview"><header><b>WOJNY ŚWIATA</b><span>{strategicCampaigns.length} aktywnych</span></header>{strategicCampaigns.slice().sort((a,b)=>b.progress-a.progress).slice(0,6).map((campaign) => <button key={campaign.id} onClick={() => { const region=strategicRegions[campaign.regionId]; if(region){ setSelectedId(region.ownerId); focusCountry(region.ownerId); } }}><span>{engine?.getCountry(campaign.attackerId)?.flag} {engine?.getCountry(campaign.attackerId)?.name}</span><i>→</i><span>{engine?.getCountry(campaign.defenderId)?.flag} {strategicRegions[campaign.regionId]?.name}</span><b>{Math.round(campaign.progress)}%</b></button>)}</div>
           </div> : <>{gameMode === "war" && playerAlarm && <div className="player-alarm" role="alert"><span aria-hidden="true">⚠</span><div><b>ALARM OBRONNY</b><small>{playerAlarm}</small></div></div>}
           {gameMode === "full" && partialWarning && <div className="partial-warning" role="status"><span aria-hidden="true">◐</span><div><b>AKCJA CZĘŚCIOWA</b><small>{partialWarning}</small></div></div>}

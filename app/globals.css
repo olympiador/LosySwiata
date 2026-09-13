@@ -96,6 +96,20 @@
   background: rgba(98, 195, 182, 0.035);
 }
 
+/* Strategic systems: compact, decision-first summaries. */
+.resource-security,.political-balance,.strategic-objectives,.strategic-dashboard{border:1px solid rgba(255,255,255,.12);background:rgba(7,17,25,.72);padding:12px;display:grid;gap:10px}
+.resource-security>header,.political-balance>header,.strategic-objectives>header{display:flex;justify-content:space-between;gap:12px;font-size:11px;letter-spacing:.08em}
+.resource-security>div{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px}.resource-security>div>span{display:grid;gap:4px}.resource-security i,.strategic-objectives i{height:4px;background:rgba(255,255,255,.1);overflow:hidden}.resource-security i em,.strategic-objectives i em{display:block;height:100%;background:var(--teal)}
+.resource-security .bottleneck{color:#ff9c6b}.resource-security .bottleneck i em{background:#ff704d}.resource-security footer{font-size:11px;color:var(--muted)}
+.political-balance>div{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.political-balance>div>span{display:grid;gap:3px}.political-balance b{font-size:14px}
+.strategic-objectives>div{display:grid;grid-template-columns:1fr auto;gap:5px;align-items:center}.strategic-objectives>div i{grid-column:1/-1}.strategic-objectives>div span{display:grid}.strategic-objectives>div small{color:var(--muted)}.strategic-objectives .completed strong{color:var(--teal)}
+.decision-preview{display:block!important;margin-top:5px;color:var(--teal)!important}
+.strategic-dashboard{grid-template-columns:repeat(3,minmax(0,1fr))}.strategic-dashboard>div{display:grid;gap:6px}.strategic-dashboard>div>b{font-size:10px;letter-spacing:.09em}.strategic-dashboard span{display:flex;justify-content:space-between;gap:7px;font-size:11px}.strategic-dashboard .bottleneck{color:#ff9c6b}.strategic-dashboard .completed{color:var(--teal)}
+.occupation-list label{display:grid;gap:4px}.occupation-list select,.casus-belli select{width:100%;background:#0a1b27;color:var(--text);border:1px solid rgba(255,255,255,.18);padding:8px}.occupation-list button{border:1px solid rgba(255,112,77,.4);background:transparent;color:#ff9c6b;padding:7px;cursor:pointer}
+.casus-belli{display:grid;gap:5px;padding:10px;border:1px solid rgba(255,255,255,.12);background:rgba(7,17,25,.6)}.casus-belli>span{font-size:10px;letter-spacing:.1em}.casus-belli>small{color:var(--muted)}.decision-consequences{color:#ffd27a!important;font-size:11px!important}
+@media (max-width:760px){.resource-security>div{grid-template-columns:repeat(2,minmax(0,1fr))}.strategic-dashboard{grid-template-columns:1fr}}
+.map-frame.is-map-dragging .country-label-layer,.map-frame.is-map-dragging .capital-layer,.map-frame.is-map-dragging .city-layer,.map-frame.is-map-dragging .war-scar-layer,.map-frame.is-map-dragging .battle-layer{opacity:0;pointer-events:none}.map-frame.is-map-dragging .world-map{cursor:grabbing}
+
 .population-dossier > div {
   display: flex;
   flex-direction: column;
