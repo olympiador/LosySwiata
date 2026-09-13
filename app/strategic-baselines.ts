@@ -1609,3 +1609,17 @@ export const STRATEGIC_BASELINES: Record<string, StrategicBaseline> = {
     "military": 473945274.725
   }
 };
+
+// Braki World Bank dla państw i terytoriów występujących na mapie gry.
+// Wszystkie wartości dotyczą 2021 r.; generator zachowuje ten sam zestaw.
+Object.assign(STRATEGIC_BASELINES, {
+  ATF: { population: 0 },
+  ESH: { population: 612_000 },
+  FLK: { population: 3_662 },
+  GUF: { population: 286_618 },
+  NCL: { population: 285_214 },
+  PRK: { population: 26_232_534 },
+  TWN: { population: 23_375_314 },
+  UNK: { population: STRATEGIC_BASELINES.XKX.population },
+  VAT: { population: 451 },
+});

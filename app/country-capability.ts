@@ -121,7 +121,6 @@ function signed(delta: number) { return delta > 0.05 ? "+" : ""; }
 
 const MANUAL_BASELINES: Record<string, {
   economy?: number;
-  populationAbsolute?: number;
   technology?: number;
   logistics?: number;
   military?: number;
@@ -130,17 +129,17 @@ const MANUAL_BASELINES: Record<string, {
   informationEnvironment?: { score: number; techComponent: number; mediaControl: number; servicesStrength: number };
   combatExperience?: number;
 }> = {
-  POL: { economy: 65, populationAbsolute: 38_000_000, technology: 68, logistics: 72, military: 55, stability: 53, regimeType: "democracy", informationEnvironment: { score: 48, techComponent: 68, mediaControl: 28, servicesStrength: 35 }, combatExperience: 3 },
-  ROU: { economy: 58, populationAbsolute: 19_000_000, technology: 52, logistics: 62, military: 38, stability: 47, regimeType: "democracy", informationEnvironment: { score: 42, techComponent: 52, mediaControl: 32, servicesStrength: 40 }, combatExperience: 2 },
-  UKR: { economy: 38, populationAbsolute: 44_000_000, technology: 48, logistics: 50, military: 48, stability: 32, regimeType: "democracy", informationEnvironment: { score: 38, techComponent: 48, mediaControl: 35, servicesStrength: 38 }, combatExperience: 8 },
-  BLR: { economy: 35, populationAbsolute: 9_000_000, technology: 45, logistics: 55, military: 42, stability: 42, regimeType: "authoritarian", informationEnvironment: { score: 66, techComponent: 45, mediaControl: 72, servicesStrength: 65 }, combatExperience: 1 },
-  RUS: { economy: 65, populationAbsolute: 144_000_000, technology: 62, logistics: 58, military: 88, stability: 65, regimeType: "authoritarian", informationEnvironment: { score: 76, techComponent: 62, mediaControl: 78, servicesStrength: 72 }, combatExperience: 10 },
-  DEU: { economy: 82, populationAbsolute: 83_000_000, technology: 88, logistics: 85, military: 65, stability: 64, regimeType: "democracy", informationEnvironment: { score: 44, techComponent: 88, mediaControl: 20, servicesStrength: 32 }, combatExperience: 3 },
-  FRA: { economy: 78, populationAbsolute: 67_000_000, technology: 82, logistics: 80, military: 55, stability: 55, regimeType: "democracy", informationEnvironment: { score: 47, techComponent: 82, mediaControl: 22, servicesStrength: 38 }, combatExperience: 3 },
-  GBR: { economy: 75, populationAbsolute: 67_000_000, technology: 80, logistics: 78, military: 58, stability: 70, regimeType: "democracy", informationEnvironment: { score: 46, techComponent: 80, mediaControl: 21, servicesStrength: 37 }, combatExperience: 3 },
-  USA: { economy: 95, populationAbsolute: 331_000_000, technology: 95, logistics: 85, military: 95, stability: 58, regimeType: "democracy", informationEnvironment: { score: 55, techComponent: 95, mediaControl: 18, servicesStrength: 32 }, combatExperience: 8 },
-  TUR: { economy: 52, populationAbsolute: 84_000_000, technology: 55, logistics: 58, military: 40, stability: 50, regimeType: "authoritarian", informationEnvironment: { score: 58, techComponent: 55, mediaControl: 55, servicesStrength: 52 }, combatExperience: 6 },
-  PRK: { economy: 10, populationAbsolute: 25_000_000, technology: 25, logistics: 20, military: 35, stability: 88, regimeType: "totalitarian", informationEnvironment: { score: 82, techComponent: 25, mediaControl: 95, servicesStrength: 90 }, combatExperience: 5 },
+  POL: { economy: 65, technology: 68, logistics: 72, military: 55, stability: 53, regimeType: "democracy", informationEnvironment: { score: 48, techComponent: 68, mediaControl: 28, servicesStrength: 35 }, combatExperience: 3 },
+  ROU: { economy: 58, technology: 52, logistics: 62, military: 38, stability: 47, regimeType: "democracy", informationEnvironment: { score: 42, techComponent: 52, mediaControl: 32, servicesStrength: 40 }, combatExperience: 2 },
+  UKR: { economy: 38, technology: 48, logistics: 50, military: 48, stability: 32, regimeType: "democracy", informationEnvironment: { score: 38, techComponent: 48, mediaControl: 35, servicesStrength: 38 }, combatExperience: 8 },
+  BLR: { economy: 35, technology: 45, logistics: 55, military: 42, stability: 42, regimeType: "authoritarian", informationEnvironment: { score: 66, techComponent: 45, mediaControl: 72, servicesStrength: 65 }, combatExperience: 1 },
+  RUS: { economy: 65, technology: 62, logistics: 58, military: 88, stability: 65, regimeType: "authoritarian", informationEnvironment: { score: 76, techComponent: 62, mediaControl: 78, servicesStrength: 72 }, combatExperience: 10 },
+  DEU: { economy: 82, technology: 88, logistics: 85, military: 65, stability: 64, regimeType: "democracy", informationEnvironment: { score: 44, techComponent: 88, mediaControl: 20, servicesStrength: 32 }, combatExperience: 3 },
+  FRA: { economy: 78, technology: 82, logistics: 80, military: 55, stability: 55, regimeType: "democracy", informationEnvironment: { score: 47, techComponent: 82, mediaControl: 22, servicesStrength: 38 }, combatExperience: 3 },
+  GBR: { economy: 75, technology: 80, logistics: 78, military: 58, stability: 70, regimeType: "democracy", informationEnvironment: { score: 46, techComponent: 80, mediaControl: 21, servicesStrength: 37 }, combatExperience: 3 },
+  USA: { economy: 95, technology: 95, logistics: 85, military: 95, stability: 58, regimeType: "democracy", informationEnvironment: { score: 55, techComponent: 95, mediaControl: 18, servicesStrength: 32 }, combatExperience: 8 },
+  TUR: { economy: 52, technology: 55, logistics: 58, military: 40, stability: 50, regimeType: "authoritarian", informationEnvironment: { score: 58, techComponent: 55, mediaControl: 55, servicesStrength: 52 }, combatExperience: 6 },
+  PRK: { economy: 10, technology: 25, logistics: 20, military: 35, stability: 88, regimeType: "totalitarian", informationEnvironment: { score: 82, techComponent: 25, mediaControl: 95, servicesStrength: 90 }, combatExperience: 5 },
 };
 
 function defaultPyramid(): DemographicPyramid {
@@ -224,31 +223,27 @@ export function initialCapabilityStates(countries: Country[]): CountryCapability
   return countries.map((country) => {
     const calibrated = MANUAL_BASELINES[country.iso3 as keyof typeof MANUAL_BASELINES];
     const reportedPopulation = STRATEGIC_BASELINES[country.iso3 ?? ""]?.population;
-    // Czasem źródłowy rekord jest agregatem regionalnym. Dla państwa bierzemy
-    // tylko wiarygodną, pojedynczą populację. Wzór awaryjny zostaje wyłącznie
-    // dla terytoriów, których nie ma w bazie.
-    const baselinePopulation = Number.isFinite(reportedPopulation) && reportedPopulation! >= 10_000 && reportedPopulation! <= 1_500_000_000
+    // Klucz ISO3 pochodzi z listy państw, więc nie trafi tu rekord agregatu
+    // regionalnego. Dopuszczamy również mikropaństwa i terytoria bez stałych
+    // mieszkańców; wzór awaryjny służy wyłącznie błędnemu lub nieznanemu ISO3.
+    const baselinePopulation = Number.isFinite(reportedPopulation) && reportedPopulation! >= 0 && reportedPopulation! <= 1_500_000_000
       ? reportedPopulation!
       : undefined;
     const fallback = {
       economy: 20 + ((country.id * 137.508) % 40),
-      population: 20 + ((country.id * 251.17) % 35),
       technology: 18 + ((country.id * 89.33) % 30),
       logistics: 16 + ((country.id * 191.7) % 28),
       military: 18 + ((country.id * 311.4) % 34),
       stability: 22 + ((country.id * 73.9) % 30),
     };
+    const fallbackPopulation = 1_000_000 + ((country.id * 251.17) % 35) * 1_000_000;
+    const populationAbsolute = baselinePopulation ?? fallbackPopulation;
+    const populationComponent = clamp(populationAbsolute / 1_000_000);
     const components = { ...(calibrated
-      ? { economy: clamp(calibrated.economy ?? fallback.economy), population: clamp((calibrated.populationAbsolute ?? 0) / 1_000_000), technology: clamp(calibrated.technology ?? fallback.technology), logistics: clamp(calibrated.logistics ?? fallback.logistics), military: clamp(calibrated.military ?? fallback.military), stability: clamp(calibrated.stability ?? fallback.stability) }
-      : { ...fallback, stability: clamp(fallback.stability) }) };
+      ? { economy: clamp(calibrated.economy ?? fallback.economy), population: populationComponent, technology: clamp(calibrated.technology ?? fallback.technology), logistics: clamp(calibrated.logistics ?? fallback.logistics), military: clamp(calibrated.military ?? fallback.military), stability: clamp(calibrated.stability ?? fallback.stability) }
+      : { ...fallback, population: populationComponent, stability: clamp(fallback.stability) }) };
     const regimeType = calibrated?.regimeType ?? initialRegimeType(country.id);
     const informationEnvironment = calibrated?.informationEnvironment ?? initialInformationEnvironment(country.id);
-    let populationAbsolute = calibrated?.populationAbsolute ?? baselinePopulation ?? components.population * 1_000_000;
-    if (!calibrated && baselinePopulation === undefined && components.population > 45) {
-      const fallbackPop = 1_000_000 + ((country.id * 251.17) % 35) * 1_000_000;
-      components.population = clamp(fallbackPop / 1_000_000, 0, 45);
-      populationAbsolute = components.population * 1_000_000;
-    }
     const demographics = initialDemographics(country, components);
     const culturalProximity = defaultProximity();
     return {

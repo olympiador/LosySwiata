@@ -2534,9 +2534,11 @@ test("strategic player begins with a usable decision and sees policies beyond cu
 });
 
 test("real population is independent of country ordering", () => {
-  for (const iso3 of ["LTU", "LVA", "CHN", "BRA", "IND"]) for (let id = 0; id < 250; id++) {
+  for (const iso3 of ["LTU", "LVA", "CHN", "BRA", "IND", "POL", "ROU", "UKR", "BLR", "RUS", "DEU", "FRA", "GBR", "USA", "TUR", "PRK", "NCL", "TWN", "UNK", "VAT", "GUF", "ESH", "FLK", "ATF"]) for (let id = 0; id < 250; id++) {
     const state = initialCapabilityStates([{ ...countries[0], id, iso3 }])[0];
-    assert.equal(state.populationAbsolute, STRATEGIC_BASELINES[iso3].population, `${iso3}, id ${id}`);
+    const expectedPopulation = STRATEGIC_BASELINES[iso3].population!;
+    assert.equal(state.populationAbsolute, expectedPopulation, `${iso3}, id ${id}`);
+    assert.equal(state.components.population, Math.min(100, expectedPopulation / 1_000_000), `${iso3} component, id ${id}`);
   }
 });
 
