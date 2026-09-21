@@ -236,6 +236,7 @@ export type Country = {
   flag: string;
   color: [number, number, number];
   initialWeight: number;
+  landlocked?: boolean;
   region?: RegionalGameRegion;
   capital?: { name: string; latitude: number; longitude: number };
 };
@@ -354,6 +355,7 @@ type CountryRow = {
   cca3?: string;
   independent?: boolean;
   unMember?: boolean;
+  landlocked?: boolean;
   latlng?: number[];
   name: { common: string };
   translations?: Record<string, { common?: string }>;
@@ -946,6 +948,7 @@ export class WorldEngine {
         flag: row.flag ?? "◈",
         color: hslToRgb((id * 137.508 + 17) % 360, 60 + (id % 3) * 3, 47 + (id % 4) * 2),
         initialWeight: 0,
+        landlocked: row.landlocked,
         region: classifyGameRegion(row.cca2, row.region, row.subregion),
         capital: capital ? { name: POLISH_CAPITAL_OVERRIDES[row.cca2] ?? capital[0], latitude: capital[1], longitude: capital[2] } : undefined,
       };
@@ -961,6 +964,7 @@ export class WorldEngine {
         flag: frenchGuianaRow.flag ?? "🇬🇫",
         color: hslToRgb((id * 137.508 + 17) % 360, 60 + (id % 3) * 3, 47 + (id % 4) * 2),
         initialWeight: 0,
+        landlocked: frenchGuianaRow.landlocked,
         region: classifyGameRegion("GF", frenchGuianaRow.region, frenchGuianaRow.subregion),
         capital: capital ? { name: POLISH_CAPITAL_OVERRIDES.GF ?? capital[0], latitude: capital[1], longitude: capital[2] } : undefined,
       });
@@ -3475,6 +3479,7 @@ export class WorldEngine {
 
   private coast(actorId: number, direction: Direction, stats: Stats[]) {
     const result: Array<{ own: number; sea: number; score: number }> = [];
+    if (this.countries[actorId]?.landlocked) return result;
     const sx = Math.sign(direction.dx), sy = Math.sign(direction.dy), origin = stats[actorId];
     const stableCoast = this.landAnchorCells(actorId);
     const shoreline = new Set<number>();

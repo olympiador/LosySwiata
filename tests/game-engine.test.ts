@@ -256,7 +256,7 @@ test("a landlocked country cannot create land through a diagonal border corner",
   for (let y = 100; y <= 101; y++) for (let x = 100; x <= 101; x++) owners[indexAt(x, y)] = 0;
   for (let x = 100; x <= 101; x++) { owners[indexAt(x, 99)] = 1; owners[indexAt(x, 102)] = 1; }
   for (let y = 100; y <= 101; y++) { owners[indexAt(99, y)] = 1; owners[indexAt(102, y)] = 1; }
-  const engine = engineFrom(owners);
+  const engine = engineFrom(owners, undefined, [{ ...countries[0], landlocked: true }, countries[1]]);
   const northEast = DIRECTIONS.find((direction) => direction.short === "NE") as Direction;
   const result = engine.apply({
     rngBefore: engine.rngState, countryId: 0, action: "land", direction: northEast,
@@ -896,17 +896,17 @@ test("new land automatically rerolls an invalid direction", () => {
   assert.deepEqual(result.attempts.map((direction) => direction.short), ["N", "E"]);
 });
 
-test("enclosed sea water still counts as space for new land", () => {
+test("an inland lake does not let a landlocked country create new land", () => {
   const owners = new Int16Array(MAP_W * MAP_H);
   owners.fill(1);
   owners[indexAt(2, 2)] = 0;
   owners[indexAt(2, 3)] = 0;
   owners[indexAt(2, 4)] = 0;
   owners[indexAt(3, 3)] = -1;
-  const engine = engineFrom(owners);
+  const engine = engineFrom(owners, undefined, [{ ...countries[0], iso: "MK", name: "Macedonia Północna", landlocked: true }, countries[1]]);
   (engine as unknown as { random: () => number }).random = () => 0.4;
 
-  assert.deepEqual(engine.rollAction(0), { action: "land", possible: true });
+  assert.deepEqual(engine.rollAction(0), { action: "land", possible: false });
 });
 
 test("war capture starts on a shared border instead of a distant island", () => {
