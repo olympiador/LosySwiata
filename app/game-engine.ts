@@ -3277,13 +3277,13 @@ export class WorldEngine {
     const origin = stats[actorId];
     if (!origin?.cells) { this.directionTargetCache.set(cacheKey, null); return null; }
 
-    // A country touching the attacker in the rolled compass sector must be
-    // selected before any overseas target. Previously the ray was launched
-    // only from a few extreme boundary pixels. On a concave coast (for
-    // example Bangladesh facing SW) those pixels could point into the sea and
-    // skip a neighbouring state in favour of a remote island.
+    // A country touching the attacker in the direction's natural compass
+    // sector must be selected before an overseas target. A looser side contact
+    // remains a fallback: on a concave coast (for example Bangladesh facing
+    // SW), the rays can otherwise miss a genuine neighbouring state.
     const neighbours = [[-1, 0], [1, 0], [0, -1], [0, 1]];
-    let borderWinner: DirectionHit | null = null, borderScore = Infinity;
+    let strictBorderWinner: DirectionHit | null = null, strictBorderScore = Infinity;
+    let borderFallback: DirectionHit | null = null, borderFallbackScore = Infinity;
     for (const actorIndex of this.boundaryCells()[actorId] ?? []) {
       const actorX = actorIndex % MAP_W, actorY = Math.floor(actorIndex / MAP_W);
       for (const [ox, oy] of neighbours) {
@@ -3301,13 +3301,18 @@ export class WorldEngine {
         // behind the attacker never does.
         if (lateral > outward * 2.4143) continue;
         const score = lateral / Math.max(1, outward) - outward * 0.0001;
-        if (score < borderScore) {
-          borderScore = score;
-          borderWinner = { countryId: owner, index, distance: 1, offset: 0 };
+        const hit = { countryId: owner, index, distance: 1, offset: 0 };
+        if (score < borderFallbackScore) { borderFallbackScore = score; borderFallback = hit; }
+        // Only a contact inside the direction's natural 45-degree sector may
+        // outrank a target across a narrow strait. A looser side contact stays
+        // available as fallback when the ray finds no country at all.
+        if (lateral <= outward * 0.4143 && score < strictBorderScore) {
+          strictBorderScore = score;
+          strictBorderWinner = hit;
         }
       }
     }
-    if (borderWinner) { this.directionTargetCache.set(cacheKey, borderWinner); return borderWinner; }
+    if (strictBorderWinner) { this.directionTargetCache.set(cacheKey, strictBorderWinner); return strictBorderWinner; }
 
     // Launch from the country's outermost edge in the rolled direction. Using
     // its centroid made a long conquered appendage turn NW into a visually
@@ -3354,8 +3359,9 @@ export class WorldEngine {
         }
       }
     });
-    this.directionTargetCache.set(cacheKey, winner);
-    return winner;
+    const result = winner ?? borderFallback;
+    this.directionTargetCache.set(cacheKey, result);
+    return result;
   }
 
   private warTheater(targetId: number, seedIndex: number) {

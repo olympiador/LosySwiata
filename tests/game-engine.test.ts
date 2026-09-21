@@ -1350,6 +1350,28 @@ test("a neighbouring country in the rolled sector is targeted before a remote is
   assert.equal(hit?.countryId, 1, "the adjacent SW front must win over an overseas target on the same ray");
 });
 
+test("NE from Denmark reaches Sweden instead of adjacent land to the south-east", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  // Denmark.
+  for (let y = 400; y <= 420; y++) for (let x = 500; x <= 520; x++) owners[indexAt(x, y)] = 0;
+  // Sweden lies directly across a narrow strait to the north-east.
+  for (let y = 370; y <= 398; y++) for (let x = 522; x <= 550; x++) owners[indexAt(x, y)] = 1;
+  // Polish new land touches Denmark on its south-eastern side.
+  for (let y = 411; y <= 440; y++) for (let x = 521; x <= 540; x++) owners[indexAt(x, y)] = 2;
+  const sourceCountries: Country[] = [
+    { ...countries[0], iso: "DK", name: "Dania" },
+    { ...countries[1], iso: "SE", name: "Szwecja" },
+    { id: 2, iso: "PL", name: "Polska", flag: "P", color: [220, 80, 80], initialWeight: 0 },
+  ];
+  const engine = engineFrom(owners, undefined, sourceCountries);
+  const northEast = DIRECTIONS.find((direction) => direction.short === "NE") as Direction;
+  const hit = (engine as unknown as { targetInDirection: (actorId: number, direction: Direction, stats: unknown[]) => { countryId: number } | null })
+    .targetInDirection(0, northEast, engine.getStats());
+
+  assert.equal(hit?.countryId, 1, "a SE neighbour must not intercept Denmark's NE route to Sweden");
+});
+
 test("NW launches from the north-western edge even after the attacker grows a southern appendage", () => {
   const owners = new Int16Array(MAP_W * MAP_H);
   owners.fill(-1);
