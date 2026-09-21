@@ -171,6 +171,10 @@ const tabLabels: Record<DossierTab, string> = {
 
 function wait(ms: number) { return new Promise((resolve) => window.setTimeout(resolve, ms)); }
 
+function normalizeCountrySearch(value: string) {
+  return value.trim().toLocaleLowerCase("pl").normalize("NFD").replace(/\p{Diacritic}/gu, "");
+}
+
 function strategicDate(turn: number) {
   const completed = Math.max(0, turn - 1);
   return `${completed % 4 + 1}. kw. ${2021 + Math.floor(completed / 4)}`;
@@ -275,6 +279,7 @@ export default function Home() {
   const [gameRegion, setGameRegion] = useState<GameRegion | null>(null);
   const [pendingMode, setPendingMode] = useState<GameMode | null>(null);
   const [pendingRegion, setPendingRegion] = useState<GameRegion | null>(null);
+  const [playerCountryQuery, setPlayerCountryQuery] = useState("");
   const [playerCountryId, setPlayerCountryId] = useState<number | null>(null);
   const [strategicTargetId, setStrategicTargetId] = useState<number | null>(null);
   const [strategicCasusBelli, setStrategicCasusBelli] = useState<StrategicCasusBelliId>("security-threat");
@@ -1068,6 +1073,7 @@ export default function Home() {
     if (!engine || !ready || busy) return;
     setPendingMode(mode);
     setPendingRegion(null);
+    setPlayerCountryQuery("");
     setCataclysmOption(false);
   };
 
@@ -1101,7 +1107,7 @@ export default function Home() {
     if (!engine || !ready || !pendingMode || busy) return;
     const seed = requestedSeed();
     if (seed === null) return;
-    if (pendingMode === "strategy" || pendingMode === "war") { setSeedInput(String(seed)); setPendingRegion(region); return; }
+    if (pendingMode === "strategy" || pendingMode === "war") { setSeedInput(String(seed)); setPendingRegion(region); setPlayerCountryQuery(""); return; }
     startConfiguredGame(pendingMode, region, seed, null);
   };
 
@@ -1474,6 +1480,11 @@ export default function Home() {
       && (microstateRule === "all" || engine.getCountryInitialKm2(country.id) >= 10_000))
       .sort((a, b) => a.name.localeCompare(b.name, "pl"));
   }, [engine, microstateRule, pendingRegion]);
+  const visiblePlayerCountries = useMemo(() => {
+    const query = normalizeCountrySearch(playerCountryQuery);
+    if (pendingMode !== "war" || !query) return eligiblePlayerCountries;
+    return eligiblePlayerCountries.filter((country) => normalizeCountrySearch(`${country.name} ${country.iso}`).includes(query));
+  }, [eligiblePlayerCountries, pendingMode, playerCountryQuery]);
   const buildChronicle = useCallback(() => {
     if (!engine || !gameMode || !gameRegion) return;
     setChronicleText(localChronicle(engine.seed, turn, ranking, history));
@@ -1823,16 +1834,18 @@ export default function Home() {
           </div>
           <p className="mode-footnote">{ready ? "W kolejnym kroku wybierzesz obszar rozgrywki." : "Przygotowuję mapę świata…"}</p>
         </> : (pendingMode === "strategy" || pendingMode === "war") && pendingRegion ? <>
-          <button className="mode-back" onClick={() => setPendingRegion(null)}>← Wróć do obszaru</button>
+          <button className="mode-back" onClick={() => { setPendingRegion(null); setPlayerCountryQuery(""); }}>← Wróć do obszaru</button>
           <span className="eyebrow">NOWA ROZGRYWKA · KROK 3 Z 3 · {pendingMode === "war" ? "WAR ONLY" : "STRATEGICZNY"}</span>
           <h2 id="mode-title">{pendingMode === "war" ? "Wybierz swoje państwo (opcjonalnie)" : "Wybierz swoje państwo"}</h2>
           <p className="mode-intro">{pendingMode === "war"
             ? "Własne państwo daje alarm o ataku, weto kierunku, gwarancję obronną i szybki powrót kamery. Możesz też oglądać świat bez żadnego kraju."
             : "Ty wybierasz cele kampanii tego państwa. Wszystkie pozostałe kraje podejmują decyzje samodzielnie."}</p>
           {pendingMode === "war" && <button className="mode-skip-player" disabled={!ready || !engine} onClick={() => choosePlayerCountry(null)}>Graj bez własnego państwa →</button>}
+          {pendingMode === "war" && <label className="country-search"><span>Wyszukaj państwo</span><input type="search" value={playerCountryQuery} onChange={(event) => setPlayerCountryQuery(event.target.value)} placeholder="Nazwa lub kod, np. Polska albo CH" autoComplete="off" /><small>{visiblePlayerCountries.length} z {eligiblePlayerCountries.length}</small></label>}
           <div className="country-picker-grid">
-            {eligiblePlayerCountries.map((country) => <button key={country.id} disabled={!ready || !engine} onClick={() => choosePlayerCountry(country.id)}><span>{country.flag}</span><strong>{country.name}</strong><small>{formatArea(engine?.getCountryInitialKm2(country.id) ?? 0)}</small><b>GRAJ →</b></button>)}
+            {visiblePlayerCountries.map((country) => <button key={country.id} disabled={!ready || !engine} onClick={() => choosePlayerCountry(country.id)}><span>{country.flag}</span><strong>{country.name}</strong><small>{formatArea(engine?.getCountryInitialKm2(country.id) ?? 0)}</small><b>GRAJ →</b></button>)}
           </div>
+          {eligiblePlayerCountries.length > 0 && !visiblePlayerCountries.length && <p className="mode-footnote">Nie znaleziono państwa pasującego do wyszukiwania.</p>}
           {!eligiblePlayerCountries.length && <p className="mode-footnote">W tym obszarze nie ma państw spełniających wybrane zasady.</p>}
         </> : <>
           <button className="mode-back" onClick={() => { setPendingMode(null); setPendingRegion(null); }}>← Wróć do trybu</button>

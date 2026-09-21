@@ -396,7 +396,7 @@ export const SIZE_LABELS: Record<SizeKey, string> = {
   tiny: "TINY",
 };
 
-const WAR_SIZES: SizeKey[] = ["all", "large", "big", "medium", "small", "tiny"];
+const WAR_SIZES: SizeKey[] = ["all", "large", "big", "medium", "small"];
 const OTHER_SIZES: SizeKey[] = ["large", "big", "medium", "small", "tiny"];
 const POLISH_NAME_OVERRIDES: Record<string, string> = {
   CI: "Wybrzeże Kości Słoniowej",
@@ -3471,8 +3471,18 @@ export class WorldEngine {
     const result: Array<{ own: number; sea: number; score: number }> = [];
     const sx = Math.sign(direction.dx), sy = Math.sign(direction.dy), origin = stats[actorId];
     const stableCoast = this.landAnchorCells(actorId);
+    const shoreline = new Set<number>();
     for (const i of this.boundaryCells()[actorId] ?? []) {
       if (!stableCoast.has(i)) continue;
+      const x = i % MAP_W, y = Math.floor(i / MAP_W);
+      if ([[-1, 0], [1, 0], [0, -1], [0, 1]].some(([ox, oy]) => {
+        const ny = y + oy;
+        return ny >= 0 && ny < MAP_H && this.owners[ny * MAP_W + wrapX(x + ox)] === -1;
+      })) shoreline.add(i);
+    }
+    // Diagonal sampling must not let a landlocked state jump over a foreign
+    // border corner into the sea. New land can start only from a real shore.
+    for (const i of shoreline) {
       const x = i % MAP_W, y = Math.floor(i / MAP_W), ny = y + sy;
       if (ny < 0 || ny >= MAP_H) continue;
       const next = ny * MAP_W + wrapX(x + sx);

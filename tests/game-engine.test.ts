@@ -233,6 +233,38 @@ test("War only never rolls land or erosion and survives save/load", () => {
   assert.equal(restored.rollAction(0).action, "war");
 });
 
+test("War only keeps every conquest size except TINY", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  owners[indexAt(100, 100)] = 0;
+  owners[indexAt(101, 100)] = 1;
+  const engine = engineFrom(owners);
+  const internals = engine as unknown as { random: () => number };
+  const rolled = new Set<string>();
+  for (const value of [0, .21, .41, .61, .81]) {
+    internals.random = () => value;
+    rolled.add(engine.rollSize("war").size);
+  }
+  assert.deepEqual([...rolled], ["all", "large", "big", "medium", "small"]);
+  internals.random = () => .99;
+  assert.equal(engine.rollSize("land").size, "tiny", "TINY remains available outside conquest");
+});
+
+test("a landlocked country cannot create land through a diagonal border corner", () => {
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 100; y <= 101; y++) for (let x = 100; x <= 101; x++) owners[indexAt(x, y)] = 0;
+  for (let x = 100; x <= 101; x++) { owners[indexAt(x, 99)] = 1; owners[indexAt(x, 102)] = 1; }
+  for (let y = 100; y <= 101; y++) { owners[indexAt(99, y)] = 1; owners[indexAt(102, y)] = 1; }
+  const engine = engineFrom(owners);
+  const northEast = DIRECTIONS.find((direction) => direction.short === "NE") as Direction;
+  const result = engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "land", direction: northEast,
+    directionAttempts: [northEast], actionWasRerolled: false, size: "small", fraction: .1, targetId: null,
+  });
+  assert.equal(result.changedIndices.length, 0);
+});
+
 test("strategic mode uses adjacent provinces, multi-round campaigns and restores command state", () => {
   const sourceCountries: Country[] = [...countries, { id: 2, iso: "CC", name: "Nowy właściciel", flag: "C", color: [70, 180, 100], initialWeight: 0 }];
   const owners = new Int16Array(MAP_W * MAP_H);
@@ -2233,9 +2265,11 @@ test("war mode snaps a capital rasterized onto a neighbour back to its own count
   assert.ok(states[1] && states[1].index !== null, "a border capital must snap to an own cell");
   assert.equal(owners[states[1]!.index!], 1);
   assert.equal(states[2]?.index, null, "a capital with no own land nearby is left unset instead of being lost");
-  const plan = engine.planTurn();
-  assert.ok(plan);
-  const { record } = engine.apply(plan!);
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+  const { record } = engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "war", direction: east,
+    directionAttempts: [east], actionWasRerolled: false, size: "small", fraction: 0, targetId: 1,
+  });
   assert.equal(record.capitalLost, undefined, "no capital falls in the opening turn without a real capture");
 });
 
@@ -2740,4 +2774,13 @@ test("map dragging renders at most once per frame without rerendering the React 
   assert.ok(!pointerMove.includes("setPan("), "pointer events must not rerender the full dashboard");
   assert.ok(page.includes("window.requestAnimationFrame"), "interactive draws must be coalesced to animation frames");
   assert.ok(renderer.includes("if (u_interacting > .5)"), "the GPU must use the lightweight shader path during motion");
+});
+
+test("War only country search and the mobile ranking layout stay wired into the UI", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.ok(page.includes('className="country-search"'));
+  assert.ok(page.includes("visiblePlayerCountries.map"));
+  assert.ok(css.includes(".ranking-head.sortable{display:none}"));
+  assert.ok(css.includes(".ranking-list:not(.with-strength) .ranking-main{grid-template-columns:28px minmax(0,1fr) auto"));
 });

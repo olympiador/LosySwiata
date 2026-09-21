@@ -272,6 +272,12 @@
 .history-flag.relocated { border-color: rgba(98, 195, 182, .34); color: #b7e9e0; }
 .mode-skip-player { margin-bottom: 10px; padding: 9px 12px; border: 1px dashed rgba(154, 197, 213, .34); border-radius: 9px; background: rgba(154, 197, 213, .06); color: var(--ink); cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .05em; }
 .mode-skip-player:hover:not(:disabled) { border-color: rgba(242, 201, 111, .6); background: rgba(242, 201, 111, .1); }
+
+.country-search{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px 10px;max-width:540px;margin:0 auto 12px;text-align:left}
+.country-search>span{grid-column:1/-1;color:var(--gold);font-size:8px;font-weight:850;letter-spacing:.1em;text-transform:uppercase}
+.country-search input{grid-column:1/-1;width:100%;height:42px;padding:0 70px 0 12px;border:1px solid var(--line2);border-radius:9px;background:#081b24;color:var(--ink);font-size:12px;outline:0}
+.country-search input:focus{border-color:rgba(98,195,182,.68);box-shadow:0 0 0 3px rgba(98,195,182,.1)}
+.country-search small{position:absolute;right:12px;bottom:14px;color:var(--muted2);font-size:8px}
 .land-ratio{display:inline-flex;align-items:center;gap:6px;color:var(--muted2);font-size:8px;font-weight:850;letter-spacing:.08em}
 .land-ratio i{display:block;overflow:hidden;width:104px;height:5px;border:1px solid var(--line);border-radius:99px;background:rgba(0,0,0,.2)}
 .land-ratio i b{display:block;height:100%;border-radius:99px;background:var(--teal);transition:width .35s ease}
@@ -325,10 +331,23 @@
 .regional-population{margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:8px}.regional-population summary{cursor:pointer;font-size:11px;font-weight:700}.regional-population p{font-size:10px;color:var(--muted)}
 @media(max-width:600px){.war-census-cards{grid-template-columns:1fr}.war-report{padding:20px;max-height:calc(100dvh - 24px)}}
 
-/* Keep country rows readable inside the scrolling ranking. */
+/* On phones the ranking is a card list instead of a clipped desktop table. */
 @media(max-width:720px){
-  .ranking-list:not(.with-strength) .ranking-main{min-height:48px}
+  .ranking-head.sortable{display:none}
+  .ranking-list{max-height:70dvh;min-height:150px;margin-top:2px;overflow-y:auto}
+  .ranking-list:not(.with-strength) .ranking-main{grid-template-columns:28px minmax(0,1fr) auto;grid-template-rows:auto auto;gap:4px 8px;min-height:62px;padding:8px 9px}
+  .ranking-list:not(.with-strength) .ranking-main>b{grid-row:1/3;align-self:center;font-size:12px}
+  .ranking-list:not(.with-strength) .ranking-country{grid-column:2;grid-row:1}
   .ranking-list:not(.with-strength) .ranking-country strong{font-size:11px;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
   .ranking-list:not(.with-strength) .ranking-country i{flex-shrink:0}
+  .ranking-list:not(.with-strength) .ranking-area{grid-column:2;grid-row:2;text-align:left;font-size:9px}
+  .ranking-list:not(.with-strength) .ranking-main>em{grid-column:3;grid-row:1;font-size:10px}
+  .ranking-list:not(.with-strength) .ranking-main>small{grid-column:3;grid-row:2;font-size:9px}
   .ranking-list:not(.with-strength) .guarantee-button{min-height:36px;font-size:10px}
+  .history-panel.world-panel{min-width:0}
+  .country-picker-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+@media(max-width:460px){
+  .country-picker-grid{grid-template-columns:1fr}
 }
