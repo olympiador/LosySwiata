@@ -2832,6 +2832,14 @@ test("GPU map keeps full interaction resolution and reconstructed close-up conto
   assert.ok(renderer.includes("cubicWeights"));
   assert.ok(renderer.includes("u_zoom < 2.15 ? world : ownerSourceUv"));
   assert.ok(renderer.includes("this.uploadTexture(0, this.mapTexture, map);"));
+  assert.ok(renderer.includes("smoothedOwnerAt(world, movingSourceUv, movingMargin)"));
+  assert.ok(!renderer.includes("vec4 movingColour = texture(u_map, world)"));
   assert.ok(!renderer.includes("mapUsesNearest"));
   assert.ok(!page.includes("lowResolution"));
+});
+
+test("political fills do not expose artificial per-cell checkerboard noise", () => {
+  const engine = readFileSync(new URL("../app/game-engine.ts", import.meta.url), "utf8");
+  assert.ok(!engine.includes("sourceX * 17 + sourceY * 31 + owner * 11"));
+  assert.ok(!engine.includes("sourceX * 13 + sourceY * 7"));
 });

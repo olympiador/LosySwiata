@@ -5291,10 +5291,9 @@ export class WorldEngine {
           const [r, g, b] = this.reliefColour(owner, source, worldX, worldY, viewport ? viewZoom : 1, selected, Boolean(sourceFlash?.[source]));
           pixels[pixel] = r; pixels[pixel + 1] = g; pixels[pixel + 2] = b;
         } else if (owner < 0) {
-          const wave = ((sourceX * 13 + sourceY * 7) % 17) / 17;
-          pixels[pixel] = 7; pixels[pixel + 1] = 17 + Math.round(wave * 3); pixels[pixel + 2] = 24 + Math.round(wave * 5);
+          pixels[pixel] = 7; pixels[pixel + 1] = 19; pixels[pixel + 2] = 28;
         } else {
-          const [r, g, b] = this.countries[owner].color, texture = (((sourceX * 17 + sourceY * 31 + owner * 11) % 13) - 6) * 0.55;
+          const [r, g, b] = this.countries[owner].color;
           const glow = sourceFlash?.[source] ? 18 : owner === selected ? 10 : 0;
           const playable = this.isCountryPlayable(owner), fade = playable ? 1 : 0.24;
           const flag = mapStyle === "flags" || mapStyle === "hybrid" ? this.sampleFlag(owner, index, x, y) : null;
@@ -5306,9 +5305,9 @@ export class WorldEngine {
           const roomR = (luminance + (baseR - luminance) * MAP_ROOM_SATURATION) * MAP_ROOM_BRIGHTNESS + MAP_ROOM_LIFT;
           const roomG = (luminance + (baseG - luminance) * MAP_ROOM_SATURATION) * MAP_ROOM_BRIGHTNESS + MAP_ROOM_LIFT;
           const roomB = (luminance + (baseB - luminance) * MAP_ROOM_SATURATION) * MAP_ROOM_BRIGHTNESS + MAP_ROOM_LIFT;
-          pixels[pixel] = Math.min(255, Math.max(0, (roomR + texture + glow) * fade + (playable ? 0 : 8)));
-          pixels[pixel + 1] = Math.min(255, Math.max(0, (roomG + texture + glow) * fade + (playable ? 0 : 18)));
-          pixels[pixel + 2] = Math.min(255, Math.max(0, (roomB + texture + glow * 0.3) * fade + (playable ? 0 : 23)));
+          pixels[pixel] = Math.min(255, Math.max(0, (roomR + glow) * fade + (playable ? 0 : 8)));
+          pixels[pixel + 1] = Math.min(255, Math.max(0, (roomG + glow) * fade + (playable ? 0 : 18)));
+          pixels[pixel + 2] = Math.min(255, Math.max(0, (roomB + glow * 0.3) * fade + (playable ? 0 : 23)));
         }
         pixels[pixel + 3] = 255;
       }

@@ -149,11 +149,20 @@ void main() {
   vec2 world = vec2(.5) + (v_screen - vec2(.5) - u_pan) / u_zoom;
   world.x = fract(world.x);
   world.y = clamp(world.y, 0.0, 1.0);
-  // During a pan or pinch the eye follows motion, not sub-pixel borders.
-  // Skip the expensive multi-sample contour reconstruction for those frames;
-  // the full-quality image is restored immediately when the gesture ends.
+  // Keep the same cubic ownership contour while moving, but skip secondary
+  // province and administrative passes. This prevents the old switch to a
+  // blurry linearly enlarged bitmap without paying the full static cost.
   if (u_interacting > .5) {
-    vec4 movingColour = texture(u_map, world);
+    vec2 movingSourceUv;
+    float movingMargin;
+    vec4 movingColour;
+    if (u_zoom < 2.15) movingColour = texture(u_map, world);
+    else {
+      smoothedOwnerAt(world, movingSourceUv, movingMargin);
+      movingColour = texture(u_map, movingSourceUv);
+      float movingLine = 1.0 - smoothstep(0.0, max(.0001, fwidth(movingMargin) * 1.35), movingMargin);
+      movingColour.rgb = mix(movingColour.rgb, vec3(.012, .045, .058), .9 * movingLine);
+    }
     if (u_selectedRegion > 0.0) {
       vec3 raw = floor(texture(u_identity, world).rgb * 255.0 + .5);
       float movingRegion = raw.g + raw.b * 256.0;
