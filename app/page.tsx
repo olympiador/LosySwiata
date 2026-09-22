@@ -833,7 +833,10 @@ export default function Home() {
         await wait(animationMode === "full" ? 360 : 90);
       } else await wait(Math.max(70, 150 / speed));
       const result = engine.apply(plan);
-      highlightRef.current = result.changedIndices;
+      // The vector map already shows the changed territory. Rebuilding a
+      // raster outline here produced the blocky post-action halo and forced
+      // another full-map scan on the main thread.
+      highlightRef.current = gameMode === "strategy" ? result.changedIndices : [];
       activeTurnRef.current = null;
       setActiveTurnId(null);
       refresh(engine); autosave(engine); paint();
@@ -1012,7 +1015,7 @@ export default function Home() {
         await wait(beforeDelay);
 
         const result = engine.apply(plan);
-        highlightRef.current = result.changedIndices;
+        highlightRef.current = [];
         activeTurnRef.current = null;
         setActiveTurnId(null);
         refresh(engine);
@@ -1528,7 +1531,7 @@ export default function Home() {
   };
   const battleAngle = battleFx ? Math.atan2(battleFx.direction.dy, battleFx.direction.dx) * 180 / Math.PI : 0;
   const vectorMapCountries = useMemo(() => engine?.getVectorMapCountries() ?? [], [dataVersion, engine]);
-  const vectorChangeMask = useMemo(() => engine?.getVectorChangeMask() ?? null, [dataVersion, engine]);
+  const vectorChangeLayers = useMemo(() => engine?.getVectorChangeLayers() ?? [], [dataVersion, engine]);
   const vectorMapViewBox = useMemo(() => {
     const panX = pan.x / Math.max(1, mapSize.width), panY = pan.y / Math.max(1, mapSize.height);
     const width = 2 / zoom, height = 1 / zoom;
@@ -1634,13 +1637,13 @@ export default function Home() {
                   <stop offset=".52" stopColor="#09222e" />
                   <stop offset="1" stopColor="#071923" />
                 </linearGradient>
-                {vectorChangeMask && <mask id="vector-map-change-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="2" height="1">
-                  <image href={vectorChangeMask} x="0" y="0" width="2" height="1" preserveAspectRatio="none" />
-                </mask>}
               </defs>
-              {[-1, 0, 1].map((wrap) => <g key={wrap} transform={`translate(${wrap * 2} 0)`} mask={vectorChangeMask ? "url(#vector-map-change-mask)" : undefined}>
+              {[-1, 0, 1].map((wrap) => <g key={wrap} transform={`translate(${wrap * 2} 0)`}>
                 <rect className="vector-ocean" x="0" y="0" width="2" height="1" fill="url(#vector-map-ocean)" />
                 {vectorMapCountries.map((country) => <path key={country.countryId} data-country-id={country.countryId} className={`vector-country${selectedId === country.countryId ? " selected" : ""}`} d={country.path} fill={country.fill} />)}
+                {vectorChangeLayers.length > 0 && <g className="vector-change-layer" transform={`scale(${2 / MAP_W} ${1 / MAP_H})`}>
+                  {vectorChangeLayers.map((layer) => <path key={layer.ownerId} className="vector-change" d={layer.path} fill={layer.fill} stroke={layer.fill} />)}
+                </g>}
               </g>)}
             </svg>}
             {(mapStyle === "labels" || mapStyle === "relief") && <div className={`country-label-layer ${autoFocusing ? "is-auto-focusing" : ""}`} aria-hidden="true">

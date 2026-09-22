@@ -2850,9 +2850,38 @@ test("close-up map uses precise vector geography and moves it on the animation f
   const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.ok(engine.includes('world-atlas/countries-10m.json'));
   assert.ok(engine.includes(".digits(7)"), "SVG geography must retain sub-pixel atlas precision at maximum zoom");
-  assert.ok(engine.includes("getVectorChangeMask"), "live territorial changes must remain visible through the vector base map");
+  assert.ok(engine.includes("getVectorChangeLayers"), "live territorial changes must remain visible over the vector base map");
   assert.ok(!engine.includes('context.strokeStyle = "rgba(142,195,219,.1)"'), "the world grid must not be baked into the magnified raster");
   assert.ok(page.includes('className="vector-country-layer"'));
   assert.ok(page.includes('vectorMapRef.current.setAttribute("viewBox"'));
   assert.ok(css.includes("vector-effect:non-scaling-stroke"));
+});
+
+test("post-action map updates avoid the raster highlight and full-map mask rebuild", () => {
+  const engine = readFileSync(new URL("../app/game-engine.ts", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const changeLayerMethod = engine.slice(engine.indexOf("getVectorChangeLayers"), engine.indexOf("getPlayerDefensePolicy"));
+  assert.ok(engine.includes("updateVectorChangedPixels(changedIndices)"));
+  assert.ok(!changeLayerMethod.includes("this.owners.length"), "ordinary turns must not rescan every simulation cell to rebuild the vector overlay");
+  assert.ok(!changeLayerMethod.includes("toDataURL"), "ordinary turns must not synchronously encode a full-size PNG mask");
+  assert.ok(page.includes('className="vector-change-layer"'));
+  assert.ok(!page.includes("vector-map-change-mask"), "changed territory must not reveal the pixel canvas below the vector atlas");
+  assert.ok(page.includes('highlightRef.current = gameMode === "strategy" ? result.changedIndices : [];'));
+  assert.ok(page.includes("highlightRef.current = [];"), "automatic full/war turns must also skip the blocky raster halo");
+});
+
+test("the vector change layer updates and clears only touched simulation cells", () => {
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  const changed = indexAt(123, 456); owners[changed] = 0;
+  const engine = engineFrom(owners);
+  const internals = engine as unknown as { updateVectorChangedPixels(indices: number[]): void };
+  engine.owners[changed] = 1;
+  internals.updateVectorChangedPixels([changed]);
+  const [layer] = engine.getVectorChangeLayers();
+  assert.equal(layer.ownerId, 1);
+  assert.equal(layer.path, "M123 456h1v1h-1z");
+  assert.match(layer.fill, /^rgb\(/);
+  engine.owners[changed] = 0;
+  internals.updateVectorChangedPixels([changed]);
+  assert.deepEqual(engine.getVectorChangeLayers(), []);
 });

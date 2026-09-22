@@ -28,6 +28,8 @@ const OLDER_MAP_W = 1440;
 const OLDER_MAP_H = 720;
 const LEGACY_MAP_W = 720;
 const LEGACY_MAP_H = 360;
+const VECTOR_MASK_W = MAP_W;
+const VECTOR_MASK_H = MAP_H;
 const CURRENT_MAP_REVISION = 7;
 const FLAG_TEXTURE_W = 192;
 const FLAG_TEXTURE_H = 128;
@@ -61,6 +63,7 @@ export type SizeKey = "all" | "large" | "big" | "medium" | "small" | "tiny";
 export type MapStyle = "colors" | "labels" | "flags" | "hybrid" | "relief";
 export type CountryLabelPlacement = { owner: number; name: string; x: number; y: number; fontSize: number; lines: string[] };
 export type VectorMapCountry = { countryId: number; path: string; fill: string };
+export type VectorMapChangeLayer = { ownerId: number; path: string; fill: string };
 export type CapitalPlacement = { countryId: number; countryName: string; name: string; x: number; y: number; controlled: boolean; regionId: number | null; relocated: boolean };
 export type StrategicCityPlacement = { id: number; countryId: number; regionId: number; name: string; x: number; y: number; controlled: boolean };
 export type StrategicCapitalRelocationOption = { regionId: number; name: string; score: number; reason: string };
@@ -858,8 +861,11 @@ export class WorldEngine {
   private capabilityChangedThisTurn = false;
   private highlightOutlineKey = "";
   private highlightOutline: Path2D | null = null;
-  private vectorMaskRevision = -1;
-  private vectorMaskUrl: string | null = null;
+  private vectorChangeLayerRevision = -1;
+  private vectorChangeLayers: VectorMapChangeLayer[] = [];
+  private vectorHasChanges = false;
+  private readonly vectorChangedPixels = new Uint8Array(VECTOR_MASK_W * VECTOR_MASK_H);
+  private readonly vectorChangedRows = new Uint8Array(VECTOR_MASK_H);
   private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 1, lastDecisionTurn: 0 };
 
   private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly ports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly populationGrid: Float32Array<ArrayBufferLike> = new Float32Array(0), private readonly vectorPaths: Array<{ countryId: number; path: string }> = []) {
@@ -1926,59 +1932,67 @@ export class WorldEngine {
   }
   getMapRevision() { return this.visualRevision; }
 
-  getVectorMapCountries(): VectorMapCountry[] {
-    return this.vectorPaths.map(({ countryId, path }) => {
-      const [r, g, b] = this.countries[countryId]?.color ?? [80, 96, 92];
-      const luminance = r * .2126 + g * .7152 + b * .0722;
-      const channel = (value: number) => Math.round(Math.max(0, Math.min(255,
-        (luminance + (value - luminance) * MAP_ROOM_SATURATION) * .82 + 21,
-      )));
-      return { countryId, path, fill: `rgb(${channel(r)} ${channel(g)} ${channel(b)})` };
-    });
+  private vectorFill(countryId: number) {
+    if (countryId < 0) return "#09222e";
+    const [r, g, b] = this.countries[countryId]?.color ?? [80, 96, 92];
+    const luminance = r * .2126 + g * .7152 + b * .0722;
+    const channel = (value: number) => Math.round(Math.max(0, Math.min(255,
+      (luminance + (value - luminance) * MAP_ROOM_SATURATION) * .82 + 21,
+    )));
+    return `rgb(${channel(r)} ${channel(g)} ${channel(b)})`;
   }
 
-  /** White keeps the detailed vector atlas visible; black reveals the live
-   * simulation below wherever a turn changed the original territory. */
-  getVectorChangeMask(): string | null {
-    if (this.vectorMaskRevision === this.visualRevision) return this.vectorMaskUrl;
-    this.vectorMaskRevision = this.visualRevision;
-    const width = 2160, height = 1080;
-    const changed = new Uint8Array(width * height);
-    let hasChanges = false;
-    for (let source = 0; source < this.owners.length; source++) {
-      if (this.owners[source] === this.initialOwners[source]) continue;
-      hasChanges = true;
-      const sourceX = source % MAP_W, sourceY = Math.floor(source / MAP_W);
-      changed[Math.floor(sourceY * height / MAP_H) * width + Math.floor(sourceX * width / MAP_W)] = 1;
-    }
-    if (!hasChanges) { this.vectorMaskUrl = null; return null; }
+  getVectorMapCountries(): VectorMapCountry[] {
+    return this.vectorPaths.map(({ countryId, path }) => ({ countryId, path, fill: this.vectorFill(countryId) }));
+  }
 
-    // Give changed territory a small safety margin. The transition then sits
-    // inside an unchanged solid fill instead of exposing two competing coast
-    // or border contours at the same location.
-    const expanded = changed.slice();
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-      if (!changed[y * width + x]) continue;
-      for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
-        const nextX = (x + ox + width) % width, nextY = y + oy;
-        if (nextY >= 0 && nextY < height) expanded[nextY * width + nextX] = 1;
+  private updateVectorChangedPixels(indices?: Iterable<number>, rebuild = false) {
+    if (rebuild) {
+      this.vectorChangedPixels.fill(0);
+      this.vectorChangedRows.fill(0);
+      this.vectorHasChanges = false;
+      for (let source = 0; source < this.owners.length; source++) {
+        if (this.owners[source] === this.initialOwners[source]) continue;
+        this.vectorChangedPixels[source] = 1;
+        this.vectorChangedRows[Math.floor(source / MAP_W)] = 1;
+        this.vectorHasChanges = true;
+      }
+    } else if (indices) {
+      for (const source of indices) {
+        if (source < 0 || source >= this.owners.length) continue;
+        const changed = this.owners[source] !== this.initialOwners[source];
+        this.vectorChangedPixels[source] = changed ? 1 : 0;
+        if (changed) { this.vectorHasChanges = true; this.vectorChangedRows[Math.floor(source / MAP_W)] = 1; }
       }
     }
-    const canvas = document.createElement("canvas");
-    canvas.width = width; canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) return null;
-    const image = context.createImageData(width, height);
-    for (let index = 0; index < expanded.length; index++) {
-      const value = expanded[index] ? 0 : 255, pixel = index * 4;
-      image.data[pixel] = value;
-      image.data[pixel + 1] = value;
-      image.data[pixel + 2] = value;
-      image.data[pixel + 3] = 255;
+    this.vectorChangeLayerRevision = -1;
+    this.vectorChangeLayers = [];
+  }
+
+  /** Draw only territory changed by the simulation over the detailed atlas.
+   * Keeping the base atlas intact avoids exposing the coarse interaction canvas. */
+  getVectorChangeLayers(): VectorMapChangeLayer[] {
+    if (this.vectorChangeLayerRevision === this.visualRevision) return this.vectorChangeLayers;
+    this.vectorChangeLayerRevision = this.visualRevision;
+    if (!this.vectorHasChanges) { this.vectorChangeLayers = []; return this.vectorChangeLayers; }
+    const ownerRuns = new Map<number, string[]>();
+    for (let y = 0; y < VECTOR_MASK_H; y++) {
+      if (!this.vectorChangedRows[y]) continue;
+      const row = y * VECTOR_MASK_W;
+      for (let x = 0; x < VECTOR_MASK_W;) {
+        while (x < VECTOR_MASK_W && !this.vectorChangedPixels[row + x]) x++;
+        if (x >= VECTOR_MASK_W) break;
+        const start = x;
+        const ownerId = this.owners[row + x];
+        while (x < VECTOR_MASK_W && this.vectorChangedPixels[row + x] && this.owners[row + x] === ownerId) x++;
+        const runs = ownerRuns.get(ownerId) ?? [];
+        runs.push(`M${start} ${y}h${x - start}v1h-${x - start}z`);
+        ownerRuns.set(ownerId, runs);
+      }
     }
-    context.putImageData(image, 0, 0);
-    this.vectorMaskUrl = canvas.toDataURL("image/png");
-    return this.vectorMaskUrl;
+    this.vectorChangeLayers = [...ownerRuns].map(([ownerId, runs]) => ({ ownerId, path: runs.join(""), fill: this.vectorFill(ownerId) }));
+    if (!this.vectorChangeLayers.length) { this.vectorHasChanges = false; this.vectorChangedRows.fill(0); }
+    return this.vectorChangeLayers;
   }
   getPlayerDefensePolicy() {
     if (this.playerCountryId === null || this.gameMode !== "strategy") return null;
@@ -4576,7 +4590,9 @@ export class WorldEngine {
       ...(cataclysmRecord ? { historyEntries: 2 } : {}),
       ...(warExhaustionBefore ? { warExhaustion: warExhaustionBefore } : {}), ...(capitalStatesBefore ? { capitalStates: capitalStatesBefore } : {}), ...(warMinShareBefore ? { warMinShare: warMinShareBefore } : {}),
     }].slice(-40);
-    return { record, changedIndices: changed.map(([index]) => index), ...(cataclysmRecord ? { cataclysmRecord } : {}) };
+    const changedIndices = changed.map(([index]) => index);
+    this.updateVectorChangedPixels(changedIndices);
+    return { record, changedIndices, ...(cataclysmRecord ? { cataclysmRecord } : {}) };
   }
 
   canUndo() { return this.undoStack.length > 0 && (this.gameMode !== "war" || this.warUndosLeft > 0); }
@@ -4586,6 +4602,7 @@ export class WorldEngine {
     if (!undo) return false;
     if (this.gameMode === "war") this.warUndosLeft--;
     for (let i = undo.changed.length - 1; i >= 0; i--) this.owners[undo.changed[i][0]] = undo.changed[i][1];
+    this.updateVectorChangedPixels(undo.changed.map(([index]) => index));
     this.countries[undo.countryId].color = [undo.color[0], undo.color[1], undo.color[2]];
     if (undo.defeatedId !== null) this.defeats[undo.countryId] = Math.max(0, this.defeats[undo.countryId] - 1);
     if (undo.changed.length) this.visualRevision++;
@@ -4627,6 +4644,11 @@ export class WorldEngine {
     else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicPolitics = []; this.strategicRelations.clear(); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
     if (mode !== "strategy") { this.strategicCapitals = []; this.pendingCapitalRelocations.clear(); }
     this.regionalPopulation = [];
+    this.vectorChangedPixels.fill(0);
+    this.vectorChangedRows.fill(0);
+    this.vectorHasChanges = false;
+    this.vectorChangeLayerRevision = -1;
+    this.vectorChangeLayers = [];
     this.initializePopulationWeights();
     this.populationDistribution = this.populationGrid.length === MAP_W * MAP_H ? "ghsl-2020" : "area";
     this.synchronizeRegionalPopulation();
@@ -4839,6 +4861,7 @@ export class WorldEngine {
     this.strategicQuarterStart = snapshot.strategicQuarterStartV1 ? structuredClone(snapshot.strategicQuarterStartV1) : this.countries.map(({ id }) => ({ ...this.strategicComponents(id) }));
     this.strategicComponentCache.clear();
     this.strategicPowerCache.clear();
+    this.updateVectorChangedPixels(undefined, true);
     this.visualRevision++;
   }
 
