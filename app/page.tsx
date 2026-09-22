@@ -147,9 +147,7 @@ type Gesture = {
   frame: { left: number; top: number; width: number; height: number } | null;
   moved: boolean;
   hadMulti: boolean;
-  lowResolution: boolean;
 };
-const INTERACTIVE_RENDER_RATIO = .5;
 const stageOrder: TurnStage[] = ["country", "action", "direction", "size", "apply"];
 const stageLabels: Record<TurnStage, string> = {
   country: "LOSUJ KRAJ",
@@ -239,11 +237,10 @@ function localChronicle(seed: number, turn: number, ranking: Array<CountryRankin
   return `KRONIKA ŚWIATA ${seed}\n\nPo ${turn} turach porządek świata uległ głębokiej przemianie. Spośród państw uczestniczących w rozgrywce ${fallen} zniknęło z mapy, a kronikarze zapisali ${wars.length} wojen, ${erosions.length} fal erozji i ${lands.length} okresów powstawania nowego lądu.\n\nNajwiększą potęgą został${leader.name.endsWith("a") ? "a" : ""} ${leader.flag} ${leader.name}, władając obszarem około ${Math.round(leader.areaKm2).toLocaleString("pl-PL")} km². Najbardziej niezwykły wzrost od początku odnotował${riser.name.endsWith("a") ? "a" : ""} ${riser.name}: ${riser.changePercent >= 0 ? "+" : ""}${riser.changePercent.toFixed(1)}%.\n\n${turningPoints.length ? `Punkty zwrotne epoki:\n${turningPoints.map((record) => `• Tura ${record.turn}: ${record.text}`).join("\n")}` : "Była to dotąd epoka zmian stopniowych, bez jednego rozstrzygającego przełomu."}\n\nTak kończy się obecny tom kroniki. Granice pozostają jednak nietrwałe, a następne losowanie może obalić nawet największe imperium.`;
 }
 
-function Wheel({ step, label, value, icon, rolling, current, onValueClick }: { step: string; label: string; value: string; icon: string; rolling: boolean; current: boolean; onValueClick?: () => void }) {
+function Wheel({ step, label, value, rolling, current, onValueClick }: { step: string; label: string; value: string; rolling: boolean; current: boolean; onValueClick?: () => void }) {
   return (
     <div className={`wheel-card ${rolling ? "is-rolling" : ""} ${current ? "is-current" : ""}`}>
       <span className="wheel-step">{step}</span>
-      <div className="wheel-orbit" aria-hidden="true"><i>{icon}</i></div>
       <div className="wheel-copy"><small>{label}</small>{onValueClick ? <button className="wheel-value" title={`${value} — pokaż na mapie`} onClick={onValueClick}>{value}</button> : <strong title={value}>{value}</strong>}</div>
     </div>
   );
@@ -359,7 +356,7 @@ export default function Home() {
   const labelViewKeyRef = useRef("");
   const backdropKeyRef = useRef("");
   const fallbackBorderZoomRef = useRef(-1);
-  const gestureRef = useRef<Gesture>({ points: new Map(), last: null, pinch: null, frame: null, moved: false, hadMulti: false, lowResolution: false });
+  const gestureRef = useRef<Gesture>({ points: new Map(), last: null, pinch: null, frame: null, moved: false, hadMulti: false });
 
   useEffect(() => { speedRef.current = speed; }, [speed]);
 
@@ -1234,14 +1231,6 @@ export default function Home() {
     const previous = gesture.points.get(event.pointerId);
     if (previous) {
       event.preventDefault();
-      if (!gesture.lowResolution) {
-        const renderer = mapRendererRef.current;
-        const frame = gesture.frame;
-        if (renderer?.screenSpaceBorders && frame) {
-          renderer.resize(frame.width, frame.height, INTERACTIVE_RENDER_RATIO);
-          gesture.lowResolution = true;
-        }
-      }
       const current = { x: event.clientX, y: event.clientY };
       gesture.points.set(event.pointerId, current);
       if (gesture.points.size === 1) {
@@ -1318,7 +1307,6 @@ export default function Home() {
       gesture.frame = null;
       gesture.moved = false;
       gesture.hadMulti = false;
-      gesture.lowResolution = false;
     }
   };
 
@@ -1742,13 +1730,14 @@ export default function Home() {
             <div className="campaign-overview"><header><b>WOJNY ŚWIATA</b><span>{strategicCampaigns.length} aktywnych</span></header>{strategicCampaigns.slice().sort((a,b)=>b.progress-a.progress).slice(0,6).map((campaign) => <button key={campaign.id} onClick={() => { const region=strategicRegions[campaign.regionId]; if(region){ setSelectedId(region.ownerId); focusCountry(region.ownerId); } }}><span>{engine?.getCountry(campaign.attackerId)?.flag} {engine?.getCountry(campaign.attackerId)?.name}</span><i>→</i><span>{engine?.getCountry(campaign.defenderId)?.flag} {strategicRegions[campaign.regionId]?.name}</span><b>{Math.round(campaign.progress)}%</b></button>)}</div>
           </div> : <>{gameMode === "war" && playerAlarm && <div className="player-alarm" role="alert"><span aria-hidden="true">⚠</span><div><b>ALARM OBRONNY</b><small>{playerAlarm}</small></div></div>}
           {gameMode === "full" && partialWarning && <div className="partial-warning" role="status"><span aria-hidden="true">◐</span><div><b>AKCJA CZĘŚCIOWA</b><small>{partialWarning}</small></div></div>}
-          <div className="wheel-grid" aria-live="polite">
-            <Wheel step="01" label="Kraj" value={wheels.country} rolling={activeWheel === "country"} current={stage === "country"} icon="◎" onValueClick={wheelCountryId === null ? undefined : () => { setSelectedId(wheelCountryId); focusCountry(wheelCountryId); }} />
-            <Wheel step="02" label="Akcja" value={wheels.action} rolling={activeWheel === "action"} current={stage === "action"} icon="△" />
-            <Wheel step="03" label="Kierunek" value={wheels.direction} rolling={activeWheel === "direction"} current={stage === "direction"} icon={wheels.direction.split(" ")[0] || "↑"} />
-            <Wheel step="04" label="Wielkość" value={wheels.size} rolling={activeWheel === "size"} current={stage === "size"} icon="%" />
-          </div>
-          <div className="primary-controls">
+          <div className="turn-console">
+            <div className="wheel-grid" aria-live="polite">
+              <Wheel step="01" label="Kraj" value={wheels.country} rolling={activeWheel === "country"} current={stage === "country"} onValueClick={wheelCountryId === null ? undefined : () => { setSelectedId(wheelCountryId); focusCountry(wheelCountryId); }} />
+              <Wheel step="02" label="Akcja" value={wheels.action} rolling={activeWheel === "action"} current={stage === "action"} />
+              <Wheel step="03" label="Kierunek" value={wheels.direction} rolling={activeWheel === "direction"} current={stage === "direction"} />
+              <Wheel step="04" label="Wielkość" value={wheels.size} rolling={activeWheel === "size"} current={stage === "size"} />
+            </div>
+            <div className="primary-controls">
             <button className={`turn-button ${stage === "apply" ? "apply" : ""}`} disabled={!ready || !gameMode || busy} onClick={() => void runStage()}><span>{busy ? (stage === "apply" ? "ZMIENIAM GRANICE" : "TRWA LOSOWANIE") : stageLabels[stage]}</span><kbd>SPACJA</kbd></button>
             <div className="secondary-controls">
               <button disabled={!engine?.canUndo() || busy || (gameMode === "war" && warUndosLeft === 0)} onClick={undo}><span>↶</span> Cofnij ostatnią turę{gameMode === "war" ? ` (${warUndosLeft})` : ""}</button>
@@ -1762,6 +1751,7 @@ export default function Home() {
               </>}
             </div>
             <label className="major-toggle"><input type="checkbox" checked={pauseOnMajor} disabled={autoRunning} onChange={(event) => setPauseOnMajor(event.target.checked)} /> Pauza po eliminacji lub wyniku ALL</label>
+            </div>
           </div></>}
           <div className={`history-panel world-panel ${infoPanelOpen ? "open" : ""}`}>
             <nav className="panel-tabs" aria-label="Informacje o świecie">

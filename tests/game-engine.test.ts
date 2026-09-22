@@ -2815,10 +2815,20 @@ test("the Map Room layout keeps the map, command dock and ranking ticker wired t
   assert.ok(page.includes('className="ranking-ticker"'));
   assert.ok(page.includes("sortedRanking.filter((entry) => entry.active).slice(0, 8)"));
   assert.ok(page.includes("infoPanelOpen"));
-  assert.ok(css.includes(".map-room-classic .wheel-grid{position:absolute"));
+  assert.ok(page.includes('className="turn-console"'));
+  assert.ok(!page.includes("INTERACTIVE_RENDER_RATIO"));
+  assert.ok(css.includes(".map-room-classic .turn-console{position:absolute"));
   assert.ok(css.includes(".ranking-ticker-track{display:flex"));
   assert.ok(css.includes(".map-room .world-map{filter:none}"));
   assert.ok(css.includes(".map-room *{backdrop-filter:none!important}"));
   assert.ok(engine.includes("MAP_ROOM_SATURATION"));
   assert.ok(css.includes("@media(max-width:900px)"));
+});
+
+test("world-scale GPU map is smoothed without reducing interaction resolution", () => {
+  const renderer = readFileSync(new URL("../app/webgl-map-renderer.ts", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.ok(renderer.includes("const useNearest = zoom >= 2.15"));
+  assert.ok(renderer.includes("useNearest ? gl.NEAREST : gl.LINEAR"));
+  assert.ok(!page.includes("lowResolution"));
 });

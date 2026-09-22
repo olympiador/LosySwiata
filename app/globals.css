@@ -381,11 +381,11 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
 .map-room .world-map{filter:none}
 .map-room .map-shade{background:linear-gradient(90deg,rgba(3,7,9,.2),transparent 16%,transparent 80%,rgba(3,7,9,.3)),linear-gradient(rgba(3,7,9,.08),transparent 42%,rgba(3,7,9,.26))}
 .map-room .map-frame{border-color:rgba(255,255,255,.08);border-radius:10px;background:#09151b;box-shadow:0 28px 80px rgba(0,0,0,.4)}
-.map-room .map-heading,.map-room .control-heading,.map-room .history-panel.world-panel,.map-room-classic .wheel-grid,.map-room-classic .primary-controls{border:1px solid rgba(255,255,255,.1);background:#11171a;box-shadow:0 16px 42px rgba(0,0,0,.34)}
+.map-room .map-heading,.map-room .control-heading,.map-room .history-panel.world-panel,.map-room-classic .turn-console{border:1px solid rgba(255,255,255,.1);background:#11171a;box-shadow:0 16px 42px rgba(0,0,0,.34)}
 .map-room .eyebrow{color:#ca8c65;letter-spacing:.14em}
 .map-room .turn-button{border-color:#d09a75;border-radius:7px;background:linear-gradient(180deg,#d39a72,#b9744e);box-shadow:0 12px 28px rgba(112,56,30,.22),inset 0 1px rgba(255,255,255,.28);color:#171311}
-.map-room .wheel-card{border-radius:7px;background:linear-gradient(150deg,rgba(255,255,255,.035),transparent 55%),rgba(19,26,29,.92)}
-.map-room .wheel-card.is-rolling{border-color:rgba(200,135,93,.62);background:linear-gradient(145deg,rgba(200,135,93,.14),rgba(19,26,29,.94));box-shadow:0 0 28px rgba(200,135,93,.1)}
+.map-room .wheel-card{border-radius:0;background:transparent}
+.map-room .wheel-card.is-rolling{border-color:rgba(200,135,93,.62);background:rgba(200,135,93,.08);box-shadow:none}
 .map-room .panel-tabs button.active{background:rgba(200,135,93,.16);color:#e0a47c}
 .map-room .country-dossier{border-color:rgba(255,255,255,.14);border-radius:9px;background:linear-gradient(155deg,rgba(22,29,32,.98),rgba(9,14,17,.98));box-shadow:22px 0 56px rgba(0,0,0,.52)}
 
@@ -405,19 +405,25 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
 .map-room-classic .zoom-controls>span{grid-column:1;width:38px;padding:6px 2px;text-align:center}
 .map-room-classic .zoom-hint{top:410px;right:auto;left:18px;width:38px;max-width:38px;writing-mode:vertical-rl}
 .map-room-classic .country-dossier{top:90px;bottom:190px;left:72px}
-.map-room-classic .event-ribbon{right:auto;bottom:184px;left:50%;width:min(610px,calc(100% - 440px));transform:translateX(-50%)}
+.map-room-classic .event-ribbon{right:auto;bottom:166px;left:50%;width:min(610px,calc(100% - 440px));transform:translateX(-50%)}
 
 .map-room-classic .controls{position:absolute;z-index:20;inset:0;display:block;min-width:0;pointer-events:none}
 .map-room-classic .controls>*{pointer-events:auto}
 .map-room-classic .control-heading{position:absolute;top:18px;right:18px;width:310px;min-height:0;margin:0;padding:7px 9px;border-radius:7px;align-items:center}
 .map-room-classic .control-heading h2{display:none}
-.map-room-classic .wheel-grid{position:absolute;right:auto;bottom:86px;left:50%;display:grid;width:min(780px,calc(100% - 120px));grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;padding:6px;border-radius:9px;transform:translateX(-50%)}
-.map-room-classic .wheel-card{min-height:62px;padding:8px 9px 8px 10px;grid-template-columns:38px minmax(0,1fr)}
-.map-room-classic .wheel-orbit{width:31px;height:31px;font-size:14px}
-.map-room-classic .wheel-copy{gap:3px}
-.map-room-classic .wheel-copy strong,.map-room-classic .wheel-copy .wheel-value{font-size:10px}
-.map-room-classic .primary-controls{position:absolute;right:auto;bottom:14px;left:50%;display:grid;width:min(1000px,calc(100% - 100px));grid-template-columns:minmax(230px,1.25fr) minmax(130px,.7fr) minmax(210px,1fr) minmax(145px,.62fr);align-items:center;gap:6px;margin:0;padding:7px;border-radius:9px;transform:translateX(-50%)}
-.map-room-classic .turn-button{min-height:48px}
+.map-room-classic .turn-console{position:absolute;z-index:20;right:auto;bottom:14px;left:50%;width:min(980px,calc(100% - 112px));overflow:hidden;border-radius:12px;transform:translateX(-50%)}
+.map-room-classic .wheel-grid{display:grid;width:auto;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;padding:0;border:0;border-bottom:1px solid rgba(255,255,255,.08);border-radius:0;background:transparent;box-shadow:none;transform:none}
+.map-room-classic .wheel-card{display:block;min-height:54px;padding:11px 16px 9px;border:0;border-right:1px solid rgba(255,255,255,.07)}
+.map-room-classic .wheel-card:last-child{border-right:0}
+.map-room-classic .wheel-card:after{display:none}
+.map-room-classic .wheel-card:before{position:absolute;right:16px;bottom:0;left:16px;height:2px;border-radius:2px;background:transparent;content:""}
+.map-room-classic .wheel-card.is-current:before,.map-room-classic .wheel-card.is-rolling:before{background:#c8875d}
+.map-room-classic .wheel-step{position:static;display:inline-block;margin-right:7px;color:rgba(200,135,93,.7);font:700 8px ui-monospace,monospace}
+.map-room-classic .wheel-copy{display:inline-flex;max-width:calc(100% - 30px);gap:3px;vertical-align:top}
+.map-room-classic .wheel-copy small{font-size:7px;letter-spacing:.16em}
+.map-room-classic .wheel-copy strong,.map-room-classic .wheel-copy .wheel-value{max-width:100%;font-size:10px;font-weight:720}
+.map-room-classic .primary-controls{display:grid;width:auto;grid-template-columns:minmax(230px,1.25fr) minmax(130px,.7fr) minmax(210px,1fr) minmax(145px,.62fr);align-items:center;gap:6px;margin:0;padding:7px;border:0;border-radius:0;background:transparent;box-shadow:none;transform:none}
+.map-room-classic .turn-button{min-height:42px;box-shadow:none}
 .map-room-classic .secondary-controls,.map-room-classic .auto-controls,.map-room-classic .major-toggle{margin:0}
 .map-room-classic .secondary-controls{grid-template-columns:minmax(0,1fr) auto}
 .map-room-classic .secondary-controls button,.map-room-classic .auto-controls button{min-height:40px;background:rgba(255,255,255,.025)}
@@ -455,8 +461,8 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
   .map-room-classic .map-heading{width:min(360px,calc(100% - 360px))}
   .map-room-classic .control-heading,.map-room-classic .history-panel.world-panel{right:12px;width:315px}
   .map-room-classic .history-panel.world-panel{max-height:330px}
-  .map-room-classic .primary-controls{width:calc(100% - 36px);grid-template-columns:minmax(210px,1.1fr) 130px minmax(190px,.9fr) 130px}
-  .map-room-classic .wheel-grid{width:min(720px,calc(100% - 40px))}
+  .map-room-classic .turn-console{width:calc(100% - 36px)}
+  .map-room-classic .primary-controls{grid-template-columns:minmax(210px,1.1fr) 130px minmax(190px,.9fr) 130px}
   .map-room-classic .event-ribbon{width:min(560px,calc(100% - 350px))}
 }
 
@@ -465,7 +471,7 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
   .map-room .topbar{min-height:62px;padding:0 14px}
   .map-room .world-status{display:none}
   .map-room-classic .game-layout,.map-room-strategy .game-layout{display:grid;height:auto;grid-template-columns:1fr;gap:10px;padding:12px}
-  .map-room-classic .map-column,.map-room-classic .map-frame,.map-room-classic .map-heading,.map-room-classic .map-footer,.map-room-classic .controls,.map-room-classic .control-heading,.map-room-classic .wheel-grid,.map-room-classic .primary-controls,.map-room-classic .history-panel.world-panel{position:relative;inset:auto;top:auto;right:auto;bottom:auto;left:auto;width:auto;max-height:none;transform:none}
+  .map-room-classic .map-column,.map-room-classic .map-frame,.map-room-classic .map-heading,.map-room-classic .map-footer,.map-room-classic .controls,.map-room-classic .control-heading,.map-room-classic .turn-console,.map-room-classic .wheel-grid,.map-room-classic .primary-controls,.map-room-classic .history-panel.world-panel{position:relative;inset:auto;top:auto;right:auto;bottom:auto;left:auto;width:auto;max-height:none;transform:none}
   .map-room-classic .map-column{display:flex;flex-direction:column}
   .map-room-classic .map-heading{order:0;margin-bottom:8px;padding:10px 12px}
   .map-room-classic .map-heading h1{max-width:calc(100vw - 64px);font-size:18px}
@@ -474,8 +480,11 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
   .map-room-classic .phase-line{width:auto;max-width:100%;background:transparent;box-shadow:none}
   .map-room-classic .controls{display:flex;gap:8px;pointer-events:auto}
   .map-room-classic .control-heading{order:0;margin:0;padding:10px 12px}
-  .map-room-classic .wheel-grid{order:1;grid-template-columns:repeat(2,minmax(0,1fr));padding:6px}
-  .map-room-classic .primary-controls{order:2;display:grid;grid-template-columns:1fr 1fr;padding:7px}
+  .map-room-classic .turn-console{order:1;overflow:hidden}
+  .map-room-classic .wheel-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .map-room-classic .wheel-card:nth-child(2){border-right:0}
+  .map-room-classic .wheel-card:nth-child(-n+2){border-bottom:1px solid rgba(255,255,255,.07)}
+  .map-room-classic .primary-controls{display:grid;grid-template-columns:1fr 1fr;padding:7px}
   .map-room-classic .turn-button{grid-column:1/-1}
   .map-room-classic .major-toggle{border-left:0}
   .map-room-classic .history-panel.world-panel{display:none;order:3;min-height:230px;padding:10px;opacity:1;pointer-events:auto}

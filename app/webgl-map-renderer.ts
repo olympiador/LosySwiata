@@ -216,6 +216,7 @@ export class WebGLMapRenderer {
   private readonly panLocation: WebGLUniformLocation;
   private readonly viewSizeLocation: WebGLUniformLocation;
   private hasTexture = false;
+  private mapUsesNearest = true;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, desynchronized: true, powerPreference: "high-performance" });
@@ -280,12 +281,11 @@ export class WebGLMapRenderer {
   }
 
   upload(map: HTMLCanvasElement, outline: HTMLCanvasElement, identity?: HTMLCanvasElement, administrative?: HTMLCanvasElement, preprojected?: boolean) {
-    // The map is a categorical political surface, not a photograph. Linear
-    // texture filtering mixed two countries' colours across a border when
-    // zoomed in, creating the visible "crayon outside the line" artefact.
-    // The shader already reconstructs contours from categorical IDs, so the
-    // colour texture itself must stay nearest-sampled.
+    // Upload categorically. draw() switches the colour layer to linear
+    // filtering at world scale, where nearest sampling exposes the source
+    // grid, and restores exact sampling for close inspection.
     this.uploadTexture(0, this.mapTexture, map, true);
+    this.mapUsesNearest = true;
     this.uploadTexture(1, this.outlineTexture, outline);
     if (identity) this.uploadTexture(2, this.identityTexture, identity, true);
     if (administrative) this.uploadTexture(3, this.administrativeTexture, administrative, true);
@@ -295,6 +295,14 @@ export class WebGLMapRenderer {
   draw({ zoom, panX, panY, selectedOwner = 0, selectedRegion = 0, interacting = false }: MapView) {
     if (!this.hasTexture) return;
     const gl = this.gl;
+    const useNearest = zoom >= 2.15;
+    if (useNearest !== this.mapUsesNearest) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.mapTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, useNearest ? gl.NEAREST : gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, useNearest ? gl.NEAREST : gl.LINEAR);
+      this.mapUsesNearest = useNearest;
+    }
     gl.useProgram(this.program);
     gl.uniform1f(this.zoomLocation, zoom);
     gl.uniform1f(this.selectedOwnerLocation, selectedOwner);
