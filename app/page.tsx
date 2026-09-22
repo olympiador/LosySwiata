@@ -339,6 +339,7 @@ export default function Home() {
   const boundaryAdministrativeRef = useRef<HTMLCanvasElement | null>(null);
   const mapRendererRef = useRef<MapRenderer | null>(null);
   const mapRef = useRef<HTMLDivElement>(null);
+  const vectorMapRef = useRef<SVGSVGElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
   const autoRunRef = useRef(false);
@@ -421,14 +422,20 @@ export default function Home() {
     if (interactiveFrameRef.current !== null) return;
     interactiveFrameRef.current = window.requestAnimationFrame(() => {
       interactiveFrameRef.current = null;
-      const renderer = mapRendererRef.current;
       const frame = mapRef.current;
-      if (!renderer || !frame) return;
+      if (!frame) return;
+      const rect = frame.getBoundingClientRect();
+      if (vectorMapRef.current) {
+        const width = 2 / zoomRef.current, height = 1 / zoomRef.current;
+        const panX = panRef.current.x / Math.max(1, rect.width), panY = panRef.current.y / Math.max(1, rect.height);
+        vectorMapRef.current.setAttribute("viewBox", `${1 - panX * 2 / zoomRef.current - width / 2} ${.5 - panY / zoomRef.current - height / 2} ${width} ${height}`);
+      }
+      const renderer = mapRendererRef.current;
+      if (!renderer) return;
       if (!renderer.screenSpaceBorders) {
         paintRef.current();
         return;
       }
-      const rect = frame.getBoundingClientRect();
       const focusedRegionId = strategicTargetId ?? inspectedSectorId;
       renderer.draw({
         zoom: zoomRef.current,
@@ -1520,6 +1527,13 @@ export default function Home() {
     notify(mode === "full" ? "Animacje pełne" : mode === "reduced" ? "Animacje skrócone" : "Animacje wyłączone");
   };
   const battleAngle = battleFx ? Math.atan2(battleFx.direction.dy, battleFx.direction.dx) * 180 / Math.PI : 0;
+  const vectorMapCountries = useMemo(() => engine?.getVectorMapCountries() ?? [], [dataVersion, engine]);
+  const vectorChangeMask = useMemo(() => engine?.getVectorChangeMask() ?? null, [dataVersion, engine]);
+  const vectorMapViewBox = useMemo(() => {
+    const panX = pan.x / Math.max(1, mapSize.width), panY = pan.y / Math.max(1, mapSize.height);
+    const width = 2 / zoom, height = 1 / zoom;
+    return `${1 - panX * 2 / zoom - width / 2} ${.5 - panY / zoom - height / 2} ${width} ${height}`;
+  }, [mapSize.height, mapSize.width, pan.x, pan.y, zoom]);
   const visibleMapLabels = useMemo(() => mapLabels.flatMap((label) => [-1, 0, 1].flatMap((wrap) => {
     const x = mapSize.width / 2 + pan.x + (label.x / 100 + wrap - .5) * mapSize.width * zoom;
     const y = mapSize.height / 2 + pan.y + (label.y / 100 - .5) * mapSize.height * zoom;
@@ -1613,6 +1627,22 @@ export default function Home() {
               className="map-source"
               aria-hidden="true"
             />
+            {engine && gameMode !== "strategy" && mapStyle !== "flags" && mapStyle !== "hybrid" && <svg ref={vectorMapRef} className="vector-country-layer" viewBox={vectorMapViewBox} preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="vector-map-ocean" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stopColor="#0b2936" />
+                  <stop offset=".52" stopColor="#09222e" />
+                  <stop offset="1" stopColor="#071923" />
+                </linearGradient>
+                {vectorChangeMask && <mask id="vector-map-change-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="2" height="1">
+                  <image href={vectorChangeMask} x="0" y="0" width="2" height="1" preserveAspectRatio="none" />
+                </mask>}
+              </defs>
+              {[-1, 0, 1].map((wrap) => <g key={wrap} transform={`translate(${wrap * 2} 0)`} mask={vectorChangeMask ? "url(#vector-map-change-mask)" : undefined}>
+                <rect className="vector-ocean" x="0" y="0" width="2" height="1" fill="url(#vector-map-ocean)" />
+                {vectorMapCountries.map((country) => <path key={country.countryId} data-country-id={country.countryId} className={`vector-country${selectedId === country.countryId ? " selected" : ""}`} d={country.path} fill={country.fill} />)}
+              </g>)}
+            </svg>}
             {(mapStyle === "labels" || mapStyle === "relief") && <div className={`country-label-layer ${autoFocusing ? "is-auto-focusing" : ""}`} aria-hidden="true">
               {visibleMapLabels.map((label) => <span key={`${label.owner}:${label.wrap}`} className="country-map-label" style={{ left: `calc(50% + ${pan.x}px + ${(label.x - 50 + label.wrap * 100) * zoom}%)`, top: `calc(50% + ${pan.y}px + ${(label.y - 50) * zoom}%)`, fontSize: `${label.fontSize}px` }}>{label.lines.map((line) => <i key={line}>{line}</i>)}</span>)}
             </div>}

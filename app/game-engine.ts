@@ -1,6 +1,7 @@
 import { geoArea, geoEquirectangular, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
 import detailedAtlas from "world-atlas/countries-50m.json";
+import vectorAtlas from "world-atlas/countries-10m.json";
 import legacyAtlas from "world-atlas/countries-110m.json";
 import worldCountries from "world-countries";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
@@ -59,6 +60,7 @@ type RegionalGameRegion = Exclude<GameRegion, "world">;
 export type SizeKey = "all" | "large" | "big" | "medium" | "small" | "tiny";
 export type MapStyle = "colors" | "labels" | "flags" | "hybrid" | "relief";
 export type CountryLabelPlacement = { owner: number; name: string; x: number; y: number; fontSize: number; lines: string[] };
+export type VectorMapCountry = { countryId: number; path: string; fill: string };
 export type CapitalPlacement = { countryId: number; countryName: string; name: string; x: number; y: number; controlled: boolean; regionId: number | null; relocated: boolean };
 export type StrategicCityPlacement = { id: number; countryId: number; regionId: number; name: string; x: number; y: number; controlled: boolean };
 export type StrategicCapitalRelocationOption = { regionId: number; name: string; score: number; reason: string };
@@ -856,9 +858,11 @@ export class WorldEngine {
   private capabilityChangedThisTurn = false;
   private highlightOutlineKey = "";
   private highlightOutline: Path2D | null = null;
+  private vectorMaskRevision = -1;
+  private vectorMaskUrl: string | null = null;
   private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 1, lastDecisionTurn: 0 };
 
-  private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly ports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly populationGrid: Float32Array<ArrayBufferLike> = new Float32Array(0)) {
+  private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly ports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly populationGrid: Float32Array<ArrayBufferLike> = new Float32Array(0), private readonly vectorPaths: Array<{ countryId: number; path: string }> = []) {
     this.countries = countries;
     this.owners = owners;
     this.initialOwners = owners.slice();
@@ -902,6 +906,7 @@ export class WorldEngine {
     };
     const legacyCollection = collectionFrom(legacyAtlas);
     const detailedCollection = collectionFrom(detailedAtlas);
+    const vectorCollection = collectionFrom(vectorAtlas);
     type AtlasFeature = (typeof detailedCollection.features)[number];
     type MappedCountry = { geometry: AtlasFeature; numeric: string; row: CountryRow };
     const displayNames = typeof Intl.DisplayNames === "undefined" ? null : new Intl.DisplayNames(["pl"], { type: "region" });
@@ -1093,7 +1098,35 @@ export class WorldEngine {
     const [elevation, administrative, airports, ports, populationGrid] = await Promise.all([terrain, admin1, loadAirports(), loadPorts(), population]);
     assignFrenchGuianaOwner(owners, administrative, countries.find((country) => country.iso === "FR")?.id ?? -1, countries.find((country) => country.iso === "GF")?.id ?? -1);
     assignMapColors(countries, owners);
-    return new WorldEngine(countries, owners, legacyOwners, seed, elevation, administrative, airports, ports, populationGrid);
+    const vectorByNumeric = new Map(vectorCollection.features.map((geometry) => [String(geometry.id ?? "").padStart(3, "0"), geometry]));
+    const vectorProjection = geoEquirectangular().translate([1, .5]).scale(1 / Math.PI).precision(.000015);
+    // geoPath defaults to three decimal places, which becomes a visible
+    // ~50-pixel coordinate grid at maximum zoom. Preserve enough atlas
+    // precision for the SVG layer to stay genuinely vector-sharp.
+    const vectorPath = geoPath(vectorProjection).pointRadius(.0014).digits(7);
+    const vectorPaths = usable.flatMap(({ geometry, numeric, row }, countryId) => {
+      const source = vectorByNumeric.get(numeric) ?? geometry;
+      const [[minX, minY], [maxX, maxY]] = vectorPath.bounds(source);
+      let path: string | null = null;
+      // A handful of tiny archipelagos are encoded with the outside of the
+      // polygon as their interior. d3 then returns an almost world-sized
+      // complement which would paint over every country drawn before it.
+      // Keep those states visible as a precise capital-sized vector marker.
+      if (maxX - minX > 1.5 || maxY - minY > .9) {
+        const [latitude, longitude] = row.latlng ?? [];
+        const point = Number.isFinite(latitude) && Number.isFinite(longitude)
+          ? vectorProjection([longitude, latitude])
+          : null;
+        if (point) {
+          const radius = .0014, x = point[0], y = point[1];
+          path = `M${(x - radius).toFixed(7)},${y.toFixed(7)}a${radius.toFixed(7)},${radius.toFixed(7)} 0 1,0 ${(radius * 2).toFixed(7)},0a${radius.toFixed(7)},${radius.toFixed(7)} 0 1,0 -${(radius * 2).toFixed(7)},0`;
+        }
+      } else {
+        path = vectorPath(source);
+      }
+      return path ? [{ countryId, path }] : [];
+    });
+    return new WorldEngine(countries, owners, legacyOwners, seed, elevation, administrative, airports, ports, populationGrid, vectorPaths);
   }
 
   private random() {
@@ -1892,6 +1925,61 @@ export class WorldEngine {
     return type === "healthy" ? "Zdrowa piramida" : type === "inverted" ? "Odwrócona piramida" : "Kominek";
   }
   getMapRevision() { return this.visualRevision; }
+
+  getVectorMapCountries(): VectorMapCountry[] {
+    return this.vectorPaths.map(({ countryId, path }) => {
+      const [r, g, b] = this.countries[countryId]?.color ?? [80, 96, 92];
+      const luminance = r * .2126 + g * .7152 + b * .0722;
+      const channel = (value: number) => Math.round(Math.max(0, Math.min(255,
+        (luminance + (value - luminance) * MAP_ROOM_SATURATION) * .82 + 21,
+      )));
+      return { countryId, path, fill: `rgb(${channel(r)} ${channel(g)} ${channel(b)})` };
+    });
+  }
+
+  /** White keeps the detailed vector atlas visible; black reveals the live
+   * simulation below wherever a turn changed the original territory. */
+  getVectorChangeMask(): string | null {
+    if (this.vectorMaskRevision === this.visualRevision) return this.vectorMaskUrl;
+    this.vectorMaskRevision = this.visualRevision;
+    const width = 2160, height = 1080;
+    const changed = new Uint8Array(width * height);
+    let hasChanges = false;
+    for (let source = 0; source < this.owners.length; source++) {
+      if (this.owners[source] === this.initialOwners[source]) continue;
+      hasChanges = true;
+      const sourceX = source % MAP_W, sourceY = Math.floor(source / MAP_W);
+      changed[Math.floor(sourceY * height / MAP_H) * width + Math.floor(sourceX * width / MAP_W)] = 1;
+    }
+    if (!hasChanges) { this.vectorMaskUrl = null; return null; }
+
+    // Give changed territory a small safety margin. The transition then sits
+    // inside an unchanged solid fill instead of exposing two competing coast
+    // or border contours at the same location.
+    const expanded = changed.slice();
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if (!changed[y * width + x]) continue;
+      for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
+        const nextX = (x + ox + width) % width, nextY = y + oy;
+        if (nextY >= 0 && nextY < height) expanded[nextY * width + nextX] = 1;
+      }
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    const image = context.createImageData(width, height);
+    for (let index = 0; index < expanded.length; index++) {
+      const value = expanded[index] ? 0 : 255, pixel = index * 4;
+      image.data[pixel] = value;
+      image.data[pixel + 1] = value;
+      image.data[pixel + 2] = value;
+      image.data[pixel + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+    this.vectorMaskUrl = canvas.toDataURL("image/png");
+    return this.vectorMaskUrl;
+  }
   getPlayerDefensePolicy() {
     if (this.playerCountryId === null || this.gameMode !== "strategy") return null;
     const playerPower = this.strategicPower(this.playerCountryId);
@@ -5370,23 +5458,6 @@ export class WorldEngine {
         context.stroke(this.highlightOutline);
         context.restore();
       }
-    }
-
-    context.strokeStyle = "rgba(142,195,219,.1)";
-    context.lineWidth = Math.max(1, canvas.width / 1800);
-    if (viewport) {
-      for (let part = 1; part < 12; part++) {
-        const x = (.5 + viewport.panX + viewZoom * (part / 12 - .5)) * width;
-        if (x > 0 && x < width) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, height); context.stroke(); }
-      }
-      for (let part = 1; part < 6; part++) {
-        const y = (.5 + viewport.panY + viewZoom * (part / 6 - .5)) * height;
-        if (y > 0 && y < height) { context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke(); }
-      }
-    } else {
-      const gridX = canvas.width / 12, gridY = canvas.height / 6;
-      for (let x = gridX; x < canvas.width; x += gridX) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, canvas.height); context.stroke(); }
-      for (let y = gridY; y < canvas.height; y += gridY) { context.beginPath(); context.moveTo(0, y); context.lineTo(canvas.width, y); context.stroke(); }
     }
 
     if ((mapStyle === "labels" || mapStyle === "relief") && labelsOnCanvas) this.drawCountryLabels(context, width, viewZoom);

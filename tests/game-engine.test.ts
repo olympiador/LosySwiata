@@ -2843,3 +2843,16 @@ test("political fills do not expose artificial per-cell checkerboard noise", () 
   assert.ok(!engine.includes("sourceX * 17 + sourceY * 31 + owner * 11"));
   assert.ok(!engine.includes("sourceX * 13 + sourceY * 7"));
 });
+
+test("close-up map uses precise vector geography and moves it on the animation frame", () => {
+  const engine = readFileSync(new URL("../app/game-engine.ts", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.ok(engine.includes('world-atlas/countries-10m.json'));
+  assert.ok(engine.includes(".digits(7)"), "SVG geography must retain sub-pixel atlas precision at maximum zoom");
+  assert.ok(engine.includes("getVectorChangeMask"), "live territorial changes must remain visible through the vector base map");
+  assert.ok(!engine.includes('context.strokeStyle = "rgba(142,195,219,.1)"'), "the world grid must not be baked into the magnified raster");
+  assert.ok(page.includes('className="vector-country-layer"'));
+  assert.ok(page.includes('vectorMapRef.current.setAttribute("viewBox"'));
+  assert.ok(css.includes("vector-effect:non-scaling-stroke"));
+});
