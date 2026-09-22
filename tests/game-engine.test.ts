@@ -2870,6 +2870,9 @@ test("post-action map updates avoid the raster highlight and full-map mask rebui
   assert.ok(!page.includes("vector-map-change-mask"), "changed territory must not reveal the pixel canvas below the vector atlas");
   assert.ok(page.includes('highlightRef.current = gameMode === "strategy" ? result.changedIndices : [];'));
   assert.ok(page.includes("highlightRef.current = [];"), "automatic full/war turns must also skip the blocky raster halo");
+  assert.ok(page.includes("const dataVersionRef = useRef(dataVersion)"), "data changes must not recreate the raster paint callback");
+  assert.ok(page.includes("const rasterMapVisible = gameMode === \"strategy\" || mapStyle === \"flags\" || mapStyle === \"hybrid\""));
+  assert.ok(!page.includes("setBattleFx(null); paint(); }, animationMode"), "vector post-action cleanup must not upload a hidden raster texture");
 });
 
 test("the vector change layer updates and clears only touched simulation cells", () => {

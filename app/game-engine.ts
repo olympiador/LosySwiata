@@ -783,6 +783,9 @@ export class WorldEngine {
   private undoStack: Undo[] = [];
   private cataclysmEnabled = false;
   private rowWeight = new Float32Array(MAP_H);
+  private longitudeSin = new Float64Array(MAP_W);
+  private longitudeCos = new Float64Array(MAP_W);
+  private weightedRowY = new Float64Array(MAP_H);
   private readonly elevation: Uint16Array<ArrayBufferLike>;
   private readonly admin1At: Int16Array<ArrayBufferLike>;
   private km2PerWeight = 1;
@@ -889,6 +892,12 @@ export class WorldEngine {
     for (let y = 0; y < MAP_H; y++) {
       const latitude = 90 - ((y + 0.5) / MAP_H) * 180;
       this.rowWeight[y] = Math.max(0.02, Math.cos(latitude * Math.PI / 180));
+      this.weightedRowY[y] = y * this.rowWeight[y];
+    }
+    for (let x = 0; x < MAP_W; x++) {
+      const angle = x / MAP_W * Math.PI * 2;
+      this.longitudeSin[x] = Math.sin(angle);
+      this.longitudeCos[x] = Math.cos(angle);
     }
     let total = 0;
     for (let i = 0; i < owners.length; i++) if (owners[i] >= 0) total += this.rowWeight[Math.floor(i / MAP_W)];
@@ -3087,9 +3096,8 @@ export class WorldEngine {
   private neighbouringCountries(ownerId: number, changed?: Array<[number, number]>) {
     const neighbours = new Set<number>();
     const steps = [[-1, 0], [1, 0], [0, -1], [0, 1]];
-    const candidates = changed?.length ? changed.map(([index]) => index) : this.boundaryCells()[ownerId] ?? [];
-    for (const index of candidates) {
-      if (this.owners[index] !== ownerId) continue;
+    const inspect = (index: number) => {
+      if (this.owners[index] !== ownerId) return;
       const x = index % MAP_W, y = Math.floor(index / MAP_W);
       for (const [ox, oy] of steps) {
         const ny = y + oy;
@@ -3097,12 +3105,17 @@ export class WorldEngine {
         const neighbour = this.owners[ny * MAP_W + wrapX(x + ox)];
         if (neighbour >= 0 && neighbour !== ownerId) neighbours.add(neighbour);
       }
+    };
+    if (changed?.length) {
+      for (const [index] of changed) inspect(index);
+    } else {
+      for (const index of this.boundaryCells()[ownerId] ?? []) inspect(index);
     }
     return [...neighbours];
   }
 
-  private ensureReadableColor(ownerId: number, changed?: Array<[number, number]>) {
-    const neighbours = this.neighbouringCountries(ownerId, changed);
+  private ensureReadableColor(ownerId: number, changed?: Array<[number, number]>, knownNeighbours?: number[]) {
+    const neighbours = knownNeighbours ?? this.neighbouringCountries(ownerId, changed);
     if (!neighbours.length) return;
     const current = this.countries[ownerId].color;
     const minimumDistance = 4_800;
@@ -3150,12 +3163,11 @@ export class WorldEngine {
       const owner = this.owners[i];
       if (owner < 0) continue;
       const x = i % MAP_W, y = Math.floor(i / MAP_W), w = this.rowWeight[y];
-      const angle = x / MAP_W * Math.PI * 2;
       cells[owner]++;
       weight[owner] += w;
-      sx[owner] += Math.sin(angle) * w;
-      cx[owner] += Math.cos(angle) * w;
-      sy[owner] += y * w;
+      sx[owner] += this.longitudeSin[x] * w;
+      cx[owner] += this.longitudeCos[x] * w;
+      sy[owner] += this.weightedRowY[y];
     }
     const result = this.countries.map(({ id }) => {
       let angle = Math.atan2(sx[id], cx[id]);
@@ -3184,8 +3196,7 @@ export class WorldEngine {
         const currentOwner = this.owners[index];
         if (previousOwner === currentOwner) continue;
         const x = index % MAP_W, y = Math.floor(index / MAP_W), weight = this.rowWeight[y];
-        const angle = x / MAP_W * Math.PI * 2;
-        const sin = Math.sin(angle) * weight, cos = Math.cos(angle) * weight, weightedY = y * weight;
+        const sin = this.longitudeSin[x] * weight, cos = this.longitudeCos[x] * weight, weightedY = this.weightedRowY[y];
         if (previousOwner >= 0) {
           next[previousOwner].cells--;
           next[previousOwner].weight -= weight;
@@ -4397,19 +4408,22 @@ export class WorldEngine {
       const seedSeabed = seabedAt(first);
       const seedRowWeight = Math.max(.12, this.rowWeight[seedY]);
       const maximumReach = Math.max(12, Math.sqrt(goal / seedRowWeight) * 2.35 + 5);
+      const maximumReachSquared = maximumReach * maximumReach;
       const frontier: Array<{ index: number; priority: number }> = [];
-      const priorityAt = (index: number) => {
+      const phase = (noiseSeed % 6_283) / 1_000;
+      const phaseShape = Math.sin(phase) * .025;
+      const priorityAt = (index: number, distance: number) => {
         const x = index % MAP_W, y = Math.floor(index / MAP_W);
         const dx = deltaX(x, seedX), dy = y - seedY;
         const outward = dx * direction.dx + dy * direction.dy;
         const lateral = Math.abs(dx * -direction.dy + dy * direction.dx);
-        const angle = Math.atan2(dy, dx), distance = Math.hypot(dx, dy);
-        const phase = (noiseSeed % 6_283) / 1_000;
-        const contour = 1
-          + Math.sin(angle * 3 + phase) * 0.09
-          + Math.sin(angle * 5 - phase * 0.73) * 0.05
-          + Math.sin(angle * 8 + phase * 1.31) * 0.025;
-        const regionalNoise = smoothNoiseAt(x, y, 43) * radius * 0.055;
+        // One coherent noise sample gives the island an irregular outline
+        // without running four trigonometric functions for every candidate.
+        // On LARGE actions this function is evaluated hundreds of thousands
+        // of times, so the old angular harmonics dominated the whole turn.
+        const shapeNoise = smoothNoiseAt(x, y, 43);
+        const contour = 1 + shapeNoise * .11 + phaseShape;
+        const regionalNoise = shapeNoise * radius * 0.055;
         // Terrain chooses among nearby cells, but cannot outweigh hundreds of
         // kilometres of distance. The old unbounded elevation bonus made a
         // thin causeway race across open sea toward a distant shallow shelf.
@@ -4432,9 +4446,11 @@ export class WorldEngine {
           if (ny < 0 || ny >= MAP_H) continue;
           const nx = wrapX(x + ox), next = ny * MAP_W + nx;
           if (queued[next] || this.owners[next] !== allowed) continue;
-          if (Math.hypot(deltaX(nx, seedX), ny - seedY) > maximumReach) continue;
+          const dx = deltaX(nx, seedX), dy = ny - seedY;
+          const distanceSquared = dx * dx + dy * dy;
+          if (distanceSquared > maximumReachSquared) continue;
           queued[next] = 1;
-          heapPush(frontier, { index: next, priority: priorityAt(next) });
+          heapPush(frontier, { index: next, priority: priorityAt(next, Math.sqrt(distanceSquared)) });
         }
       }
     }
@@ -4469,6 +4485,7 @@ export class WorldEngine {
   apply(plan: TurnPlan) {
     const before = this.stats(), actor = this.countries[plan.countryId], changed: Array<[number, number]> = [];
     let bridgeTo: string | undefined;
+    let landNeighbours: number[] | undefined;
     const actorColorBefore: [number, number, number] = [actor.color[0], actor.color[1], actor.color[2]];
     const warExhaustionBefore = this.gameMode === "war" ? [...this.warExhaustion] : undefined;
     const capitalStatesBefore = this.gameMode === "war" ? this.capitalStates.map((capital) => capital ? { ...capital } : null) : undefined;
@@ -4562,7 +4579,8 @@ export class WorldEngine {
       // of its own: compare the political neighbourhood before and after.
       const neighboursBefore = new Set(this.neighbouringCountries(actor.id));
       this.grow(this.coast(actor.id, plan.direction, before).map((item) => item.sea), -1, actor.id, goal, plan.direction, changed);
-      for (const id of this.neighbouringCountries(actor.id, changed)) {
+      landNeighbours = this.neighbouringCountries(actor.id, changed);
+      for (const id of landNeighbours) {
         if (neighboursBefore.has(id)) continue;
         bridgeTo ??= this.countries[id]?.name;
       }
@@ -4570,7 +4588,7 @@ export class WorldEngine {
       this.erodeLowlands(actor.id, plan.direction, goal, before, changed);
     }
     this.commitOwnerChanges(changed);
-    this.ensureReadableColor(actor.id, changed);
+    this.ensureReadableColor(actor.id, changed, landNeighbours);
     const weight = changed.reduce((sum, [index]) => sum + this.rowWeight[Math.floor(index / MAP_W)], 0);
     const changedKm2 = weight * this.km2PerWeight, actualFraction = before[actor.id].weight ? weight / before[actor.id].weight : 0;
     const partial = (plan.action !== "war" || plan.size !== "all") && weight + 1 < goal;

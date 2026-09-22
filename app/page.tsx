@@ -357,6 +357,7 @@ export default function Home() {
   const autosaveTimerRef = useRef<number | null>(null);
   const autosaveIdleRef = useRef<number | null>(null);
   const autosaveInstanceRef = useRef<WorldEngine | null>(null);
+  const dataVersionRef = useRef(dataVersion);
   const paintRef = useRef<() => void>(() => {});
   const labelKeyRef = useRef("");
   const labelViewKeyRef = useRef("");
@@ -365,6 +366,7 @@ export default function Home() {
   const gestureRef = useRef<Gesture>({ points: new Map(), last: null, pinch: null, frame: null, moved: false, hadMulti: false });
 
   useEffect(() => { speedRef.current = speed; }, [speed]);
+  useEffect(() => { dataVersionRef.current = dataVersion; }, [dataVersion]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -692,7 +694,7 @@ export default function Home() {
     }
     mapRendererRef.current.draw({ zoom: zoomRef.current, panX: panRef.current.x / Math.max(1, rect.width), panY: -panRef.current.y / Math.max(1, rect.height), selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1, selectedRegion: focusedRegionId === null ? 0 : focusedRegionId + 1 });
     if (mapStyle === "labels" || mapStyle === "relief") {
-      const labelViewKey = `${dataVersion}:${width}:${Math.round(rect.width)}:${zoomRef.current.toFixed(3)}`;
+      const labelViewKey = `${dataVersionRef.current}:${width}:${Math.round(rect.width)}:${zoomRef.current.toFixed(3)}`;
       if (labelViewKey !== labelViewKeyRef.current) {
         labelViewKeyRef.current = labelViewKey;
         const labels = engine.countryLabelPlacements(width, rect.width, zoomRef.current);
@@ -704,7 +706,8 @@ export default function Home() {
       labelKeyRef.current = "";
       setMapLabels([]);
     }
-  }, [dataVersion, engine, inspectedSectorId, mapLabels.length, mapStyle, strategicTargetId]);
+  }, [engine, inspectedSectorId, mapLabels.length, mapStyle, strategicTargetId]);
+  const rasterMapVisible = gameMode === "strategy" || mapStyle === "flags" || mapStyle === "hybrid";
 
   useEffect(() => { paintRef.current = paint; }, [paint]);
   useEffect(() => {
@@ -735,7 +738,33 @@ export default function Home() {
     return () => observer.disconnect();
   }, [engine, paint]);
 
-  useEffect(() => { selectedRef.current = selectedId; paint(); }, [selectedId, dataVersion, paint]);
+  useEffect(() => {
+    selectedRef.current = selectedId;
+    // In vector modes selection is a CSS stroke on the SVG atlas. Rebuilding
+    // and uploading the hidden multi-megapixel raster only blocks the frame.
+    if (rasterMapVisible) paint();
+  }, [paint, rasterMapVisible, selectedId]);
+
+  useEffect(() => {
+    if (rasterMapVisible) {
+      paint();
+      return;
+    }
+    // The SVG change layer already shows the result synchronously. Labels can
+    // be repositioned later, when the browser is idle, without delaying the
+    // visible creation of new land.
+    if (mapStyle !== "labels" && mapStyle !== "relief") return;
+    const idleWindow = window as unknown as {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    if (idleWindow.requestIdleCallback) {
+      const handle = idleWindow.requestIdleCallback(paint, { timeout: 1_500 });
+      return () => idleWindow.cancelIdleCallback?.(handle);
+    }
+    const timer = window.setTimeout(paint, 250);
+    return () => window.clearTimeout(timer);
+  }, [dataVersion, mapStyle, paint, rasterMapVisible]);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -787,7 +816,7 @@ export default function Home() {
         setPhase("Losuję kraj…");
         await spin("country", engine.countries.map((country) => `${country.flag} ${country.name}`), `${actor.flag} ${actor.name}`, 610);
         activeTurnRef.current = actor.id; setActiveTurnId(actor.id);
-        paint();
+        if (rasterMapVisible) paint();
         focusCountry(actor.id);
         setDraft({ rngBefore: result.rngBefore, countryId: actor.id });
         setStage("action");
@@ -885,8 +914,8 @@ export default function Home() {
       highlightRef.current = gameMode === "strategy" ? result.changedIndices : [];
       activeTurnRef.current = null;
       setActiveTurnId(null);
-      // Commit the light vector update first. The heavier GPU texture refresh
-      // runs from the post-render effect, after the changed coast is visible.
+      // Commit the light vector update first. Raster-only styles refresh after
+      // React commits; vector styles never rebuild the hidden GPU texture.
       refresh(engine); autosave(engine);
       setPlayerAlarm(null);
       announceFullModeEvents(result);
@@ -898,9 +927,9 @@ export default function Home() {
       if (draft.action === "war" && battleFx && animationMode !== "off") setBattleFx((current) => current ? { ...current, phase: "front" } : current);
       setDraft({}); setStage("country");
       if (highlightTimer.current) clearTimeout(highlightTimer.current);
-      highlightTimer.current = window.setTimeout(() => { highlightRef.current = []; setBattleFx(null); paint(); }, animationMode === "full" ? 1700 : 850);
+      highlightTimer.current = window.setTimeout(() => { highlightRef.current = []; setBattleFx(null); }, animationMode === "full" ? 1700 : 850);
     } finally { busyRef.current = false; setBusy(false); }
-  }, [animationMode, announceFullModeEvents, autosave, battleFx, draft, engine, focusCountry, gameMode, notify, paint, playerCountryId, ready, refresh, speed, spin, stage]);
+  }, [animationMode, announceFullModeEvents, autosave, battleFx, draft, engine, focusCountry, gameMode, notify, paint, playerCountryId, rasterMapVisible, ready, refresh, speed, spin, stage]);
 
   const applyWarVeto = useCallback(async () => {
     if (!engine || gameMode !== "war" || busyRef.current) return;
@@ -1058,7 +1087,7 @@ export default function Home() {
         activeTurnRef.current = actor?.id ?? null;
         setActiveTurnId(actor?.id ?? null);
         setPhase(actor ? `Automat: ${actor.name} wykonuje ruch…` : "Automat wykonuje ruch…");
-        paint();
+        if (rasterMapVisible) paint();
         const beforeDelay = speedRef.current >= 8 ? 35 : speedRef.current >= 4 ? 120 : speedRef.current === 2 ? 300 : 600;
         await wait(beforeDelay);
 
@@ -1068,7 +1097,6 @@ export default function Home() {
         setActiveTurnId(null);
         refresh(engine);
         autosave(engine);
-        paint();
         announceFullModeEvents(result);
         const autoPlayerName = engine.playerCountryId === null ? null : engine.getCountry(engine.playerCountryId)?.name ?? null;
         if (autoPlayerName && result.record.eliminated === autoPlayerName) {
@@ -1096,9 +1124,9 @@ export default function Home() {
       setStage("country");
       activeTurnRef.current = null;
       setActiveTurnId(null);
-      paint();
+      if (rasterMapVisible) paint();
     }
-  }, [announceFullModeEvents, autosave, engine, focusStrategicRegion, gameMode, notify, paint, pauseOnMajor, ready, refresh, resetView, stage]);
+  }, [announceFullModeEvents, autosave, engine, focusStrategicRegion, gameMode, notify, paint, pauseOnMajor, rasterMapVisible, ready, refresh, resetView, stage]);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
