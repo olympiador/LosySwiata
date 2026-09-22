@@ -2829,10 +2829,12 @@ test("GPU map keeps full interaction resolution and reconstructed close-up conto
   const renderer = readFileSync(new URL("../app/webgl-map-renderer.ts", import.meta.url), "utf8");
   const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.ok(renderer.includes("float smoothedOwnerAt"));
+  assert.ok(renderer.includes("float fastOwnerAt"));
   assert.ok(renderer.includes("cubicWeights"));
   assert.ok(renderer.includes("u_zoom < 2.15 ? world : ownerSourceUv"));
   assert.ok(renderer.includes("this.uploadTexture(0, this.mapTexture, map);"));
-  assert.ok(renderer.includes("smoothedOwnerAt(world, movingSourceUv, movingMargin)"));
+  assert.ok(renderer.includes("fastOwnerAt(world, movingSourceUv, movingMargin)"));
+  assert.ok(!renderer.includes("if (u_interacting > .5) {\n    vec2 movingSourceUv;\n    float movingMargin;\n    vec4 movingColour;\n    if (u_zoom < 2.15) movingColour = texture(u_map, world);\n    else {\n      smoothedOwnerAt"));
   assert.ok(!renderer.includes("vec4 movingColour = texture(u_map, world)"));
   assert.ok(!renderer.includes("mapUsesNearest"));
   assert.ok(!page.includes("lowResolution"));
@@ -2884,4 +2886,27 @@ test("the vector change layer updates and clears only touched simulation cells",
   engine.owners[changed] = 0;
   internals.updateVectorChangedPixels([changed]);
   assert.deepEqual(engine.getVectorChangeLayers(), []);
+});
+
+test("ordinary ownership changes update cached country totals incrementally", () => {
+  const owners = new Int16Array(MAP_W * MAP_H); owners.fill(-1);
+  const changed = indexAt(123, 456); owners[changed] = 0;
+  const engine = engineFrom(owners);
+  const before = engine.getStats().map((stats) => ({ ...stats }));
+  engine.owners[changed] = 1;
+  const internals = engine as unknown as { commitOwnerChanges(changes: Array<[number, number]>): void };
+  internals.commitOwnerChanges([[changed, 0]]);
+  const after = engine.getStats();
+  assert.equal(after[0].cells, before[0].cells - 1);
+  assert.equal(after[1].cells, before[1].cells + 1);
+});
+
+test("map interaction and autosave stay off the synchronous React input path", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const wheel = page.slice(page.indexOf("const wheelZoom"), page.indexOf("const selected = useMemo"));
+  const autosave = page.slice(page.indexOf("const autosave = useCallback"), page.indexOf("const drawInteractiveView"));
+  assert.ok(wheel.includes("}, false);"), "wheel events must update refs/canvas without rerendering the entire page");
+  assert.ok(wheel.includes("wheelCommitTimerRef.current = window.setTimeout"));
+  assert.ok(autosave.includes("requestIdleCallback"), "snapshot encoding must wait for browser idle time");
+  assert.ok(!page.includes("else await wait(Math.max(70, 150 / speed))"), "ordinary actions must not have an artificial pre-apply delay");
 });

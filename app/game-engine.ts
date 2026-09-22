@@ -791,6 +791,9 @@ export class WorldEngine {
   private visualRevision = 0;
   private statsRevision = -1;
   private statsCache: Stats[] = [];
+  private statsSin = new Float64Array(0);
+  private statsCos = new Float64Array(0);
+  private statsY = new Float64Array(0);
   private boundaryRevision = -1;
   private boundaryCache: number[][] = [];
   private landAnchorRevision = -1;
@@ -3159,18 +3162,56 @@ export class WorldEngine {
       if (angle < 0) angle += Math.PI * 2;
       return { cells: cells[id], weight: weight[id], cx: weight[id] ? angle / (Math.PI * 2) * MAP_W : 0, cy: weight[id] ? sy[id] / weight[id] : 0, anchor: -1 };
     });
-    const bestDistance = new Float64Array(this.countries.length);
-    bestDistance.fill(Infinity);
-    for (let index = 0; index < this.owners.length; index++) {
-      const owner = this.owners[index];
-      if (owner < 0) continue;
-      const x = index % MAP_W, y = Math.floor(index / MAP_W), origin = result[owner];
-      const dx = deltaX(x, origin.cx), dy = y - origin.cy, distance = dx * dx + dy * dy;
-      if (distance < bestDistance[owner]) { bestDistance[owner] = distance; origin.anchor = index; }
-    }
+    this.statsSin = sx;
+    this.statsCos = cx;
+    this.statsY = sy;
     this.statsCache = result;
     this.statsRevision = this.visualRevision;
     return result;
+  }
+
+  /** Update country totals from the cells touched by one action. A normal
+   * turn changes a local patch, so rescanning all 9.3 million cells twice made
+   * the visible map wait for work unrelated to that action. */
+  private commitOwnerChanges(changed: Array<[number, number]>) {
+    if (!changed.length) return;
+    const cacheReady = this.statsRevision === this.visualRevision
+      && this.statsCache.length === this.countries.length
+      && this.statsSin.length === this.countries.length;
+    if (cacheReady) {
+      const next = this.statsCache.map((stats) => ({ ...stats }));
+      for (const [index, previousOwner] of changed) {
+        const currentOwner = this.owners[index];
+        if (previousOwner === currentOwner) continue;
+        const x = index % MAP_W, y = Math.floor(index / MAP_W), weight = this.rowWeight[y];
+        const angle = x / MAP_W * Math.PI * 2;
+        const sin = Math.sin(angle) * weight, cos = Math.cos(angle) * weight, weightedY = y * weight;
+        if (previousOwner >= 0) {
+          next[previousOwner].cells--;
+          next[previousOwner].weight -= weight;
+          this.statsSin[previousOwner] -= sin;
+          this.statsCos[previousOwner] -= cos;
+          this.statsY[previousOwner] -= weightedY;
+        }
+        if (currentOwner >= 0) {
+          next[currentOwner].cells++;
+          next[currentOwner].weight += weight;
+          this.statsSin[currentOwner] += sin;
+          this.statsCos[currentOwner] += cos;
+          this.statsY[currentOwner] += weightedY;
+        }
+      }
+      for (let id = 0; id < next.length; id++) {
+        if (!next[id].weight) { next[id].cx = 0; next[id].cy = 0; continue; }
+        let angle = Math.atan2(this.statsSin[id], this.statsCos[id]);
+        if (angle < 0) angle += Math.PI * 2;
+        next[id].cx = angle / (Math.PI * 2) * MAP_W;
+        next[id].cy = this.statsY[id] / next[id].weight;
+      }
+      this.statsCache = next;
+    }
+    this.visualRevision++;
+    if (cacheReady) this.statsRevision = this.visualRevision;
   }
 
   getStats() { return this.stats(); }
@@ -4412,7 +4453,7 @@ export class WorldEngine {
       this.erodeLowlands(country.id, direction, stats[country.id].weight * CATACLYSM_FRACTION, stats, cataclysmChanged);
     }
     if (!cataclysmChanged.length) return undefined;
-    this.visualRevision++;
+    this.commitOwnerChanges(cataclysmChanged);
     const weight = cataclysmChanged.reduce((sum, [index]) => sum + this.rowWeight[Math.floor(index / MAP_W)], 0);
     const changedKm2 = weight * this.km2PerWeight;
     changed.push(...cataclysmChanged);
@@ -4528,7 +4569,7 @@ export class WorldEngine {
     } else {
       this.erodeLowlands(actor.id, plan.direction, goal, before, changed);
     }
-    if (changed.length) this.visualRevision++;
+    this.commitOwnerChanges(changed);
     this.ensureReadableColor(actor.id, changed);
     const weight = changed.reduce((sum, [index]) => sum + this.rowWeight[Math.floor(index / MAP_W)], 0);
     const changedKm2 = weight * this.km2PerWeight, actualFraction = before[actor.id].weight ? weight / before[actor.id].weight : 0;
@@ -4601,11 +4642,12 @@ export class WorldEngine {
     const undo = this.undoStack.pop();
     if (!undo) return false;
     if (this.gameMode === "war") this.warUndosLeft--;
+    const reversedChanges = undo.changed.map(([index]) => [index, this.owners[index]] as [number, number]);
     for (let i = undo.changed.length - 1; i >= 0; i--) this.owners[undo.changed[i][0]] = undo.changed[i][1];
     this.updateVectorChangedPixels(undo.changed.map(([index]) => index));
     this.countries[undo.countryId].color = [undo.color[0], undo.color[1], undo.color[2]];
     if (undo.defeatedId !== null) this.defeats[undo.countryId] = Math.max(0, this.defeats[undo.countryId] - 1);
-    if (undo.changed.length) this.visualRevision++;
+    this.commitOwnerChanges(reversedChanges);
     this.rngState = undo.rngBefore;
     if (undo.warExhaustion) this.warExhaustion = [...undo.warExhaustion];
     if (undo.capitalStates) this.capitalStates = undo.capitalStates.map((capital) => capital ? { ...capital } : null);

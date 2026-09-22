@@ -352,6 +352,11 @@ export default function Home() {
   const zoomRef = useRef(1);
   const panRef = useRef<Point>({ x: 0, y: 0 });
   const interactiveFrameRef = useRef<number | null>(null);
+  const wheelCommitTimerRef = useRef<number | null>(null);
+  const viewSizeRef = useRef({ width: 1, height: 1 });
+  const autosaveTimerRef = useRef<number | null>(null);
+  const autosaveIdleRef = useRef<number | null>(null);
+  const autosaveInstanceRef = useRef<WorldEngine | null>(null);
   const paintRef = useRef<() => void>(() => {});
   const labelKeyRef = useRef("");
   const labelViewKeyRef = useRef("");
@@ -415,16 +420,40 @@ export default function Home() {
   }, []);
 
   const autosave = useCallback((instance: WorldEngine) => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(instance.snapshot())); } catch { /* storage can be unavailable */ }
+    autosaveInstanceRef.current = instance;
+    if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+    const idleWindow = window as unknown as {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    if (autosaveIdleRef.current !== null) idleWindow.cancelIdleCallback?.(autosaveIdleRef.current);
+    const write = () => {
+      autosaveIdleRef.current = null;
+      if (gestureRef.current.points.size || wheelCommitTimerRef.current !== null) {
+        autosaveTimerRef.current = window.setTimeout(write, 300);
+        return;
+      }
+      autosaveTimerRef.current = null;
+      const current = autosaveInstanceRef.current;
+      if (!current) return;
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(current.snapshot()));
+        autosaveInstanceRef.current = null;
+      } catch { /* storage can be unavailable */ }
+    };
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      if (idleWindow.requestIdleCallback) autosaveIdleRef.current = idleWindow.requestIdleCallback(write, { timeout: 2_000 });
+      else autosaveTimerRef.current = window.setTimeout(write, 250);
+    }, 180);
   }, []);
 
   const drawInteractiveView = useCallback(() => {
     if (interactiveFrameRef.current !== null) return;
     interactiveFrameRef.current = window.requestAnimationFrame(() => {
       interactiveFrameRef.current = null;
-      const frame = mapRef.current;
-      if (!frame) return;
-      const rect = frame.getBoundingClientRect();
+      if (!mapRef.current) return;
+      const rect = viewSizeRef.current;
       if (vectorMapRef.current) {
         const width = 2 / zoomRef.current, height = 1 / zoomRef.current;
         const panX = panRef.current.x / Math.max(1, rect.width), panY = panRef.current.y / Math.max(1, rect.height);
@@ -450,7 +479,7 @@ export default function Home() {
 
   const applyView = useCallback((nextZoom: number, nextPan: Point, commit = true) => {
     const clampedZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom));
-    const rect = gestureRef.current.frame ?? mapRef.current?.getBoundingClientRect();
+    const rect = gestureRef.current.frame ?? (mapRef.current ? viewSizeRef.current : null);
     const limitY = rect ? rect.height * (clampedZoom - 1) / 2 : 0;
     const circumference = rect ? rect.width * clampedZoom : 0;
     const wrappedX = circumference
@@ -601,6 +630,7 @@ export default function Home() {
   const paint = useCallback(() => {
     if (!engine || !canvasRef.current || !backdropRef.current || !outlineRef.current || !mapRef.current) return;
     const rect = mapRef.current.getBoundingClientRect();
+    viewSizeRef.current = { width: rect.width, height: rect.height };
     setMapSize((current) => current.width === rect.width && current.height === rect.height ? current : { width: rect.width, height: rect.height });
     const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
     const coarsePointer = window.matchMedia("(pointer: coarse)").matches || rect.width <= 720;
@@ -677,8 +707,24 @@ export default function Home() {
   }, [dataVersion, engine, inspectedSectorId, mapLabels.length, mapStyle, strategicTargetId]);
 
   useEffect(() => { paintRef.current = paint; }, [paint]);
-  useEffect(() => () => {
-    if (interactiveFrameRef.current !== null) window.cancelAnimationFrame(interactiveFrameRef.current);
+  useEffect(() => {
+    const flushAutosave = () => {
+      const current = autosaveInstanceRef.current;
+      if (!current) return;
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(current.snapshot()));
+        autosaveInstanceRef.current = null;
+      } catch { /* storage can be unavailable */ }
+    };
+    window.addEventListener("pagehide", flushAutosave);
+    return () => {
+      window.removeEventListener("pagehide", flushAutosave);
+      if (interactiveFrameRef.current !== null) window.cancelAnimationFrame(interactiveFrameRef.current);
+      if (wheelCommitTimerRef.current !== null) window.clearTimeout(wheelCommitTimerRef.current);
+      if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+      if (autosaveIdleRef.current !== null) (window as unknown as { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback?.(autosaveIdleRef.current);
+      flushAutosave();
+    };
   }, []);
 
   useEffect(() => {
@@ -831,7 +877,7 @@ export default function Home() {
       if (draft.action === "war" && battleFx && animationMode !== "off") {
         setBattleFx((current) => current ? { ...current, phase: "clash" } : current);
         await wait(animationMode === "full" ? 360 : 90);
-      } else await wait(Math.max(70, 150 / speed));
+      }
       const result = engine.apply(plan);
       // The vector map already shows the changed territory. Rebuilding a
       // raster outline here produced the blocky post-action halo and forced
@@ -839,7 +885,9 @@ export default function Home() {
       highlightRef.current = gameMode === "strategy" ? result.changedIndices : [];
       activeTurnRef.current = null;
       setActiveTurnId(null);
-      refresh(engine); autosave(engine); paint();
+      // Commit the light vector update first. The heavier GPU texture refresh
+      // runs from the post-render effect, after the changed coast is visible.
+      refresh(engine); autosave(engine);
       setPlayerAlarm(null);
       announceFullModeEvents(result);
       const playerName = playerCountryId === null ? null : engine.getCountry(playerCountryId)?.name ?? null;
@@ -1219,6 +1267,7 @@ export default function Home() {
       gesture.hadMulti = false;
       const frame = mapRef.current?.getBoundingClientRect();
       gesture.frame = frame ? { left: frame.left, top: frame.top, width: frame.width, height: frame.height } : null;
+      if (frame) viewSizeRef.current = { width: frame.width, height: frame.height };
     }
     gesture.points.set(event.pointerId, { x: event.clientX, y: event.clientY });
     gesture.last = { x: event.clientX, y: event.clientY };
@@ -1323,16 +1372,24 @@ export default function Home() {
   const wheelZoom = (event: ReactWheelEvent<HTMLCanvasElement>) => {
     event.preventDefault();
     const frame = event.currentTarget.getBoundingClientRect();
+    viewSizeRef.current = { width: frame.width, height: frame.height };
     const oldZoom = zoomRef.current;
     const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, oldZoom * Math.exp(-event.deltaY * .0015)));
     const localX = event.clientX - frame.left - frame.width / 2;
     const localY = event.clientY - frame.top - frame.height / 2;
     const worldOffsetX = (localX - panRef.current.x) / oldZoom;
     const worldOffsetY = (localY - panRef.current.y) / oldZoom;
+    mapRef.current?.classList.add("is-map-dragging");
     applyView(nextZoom, {
       x: localX - worldOffsetX * nextZoom,
       y: localY - worldOffsetY * nextZoom,
-    });
+    }, false);
+    if (wheelCommitTimerRef.current !== null) window.clearTimeout(wheelCommitTimerRef.current);
+    wheelCommitTimerRef.current = window.setTimeout(() => {
+      wheelCommitTimerRef.current = null;
+      commitInteractiveView();
+      mapRef.current?.classList.remove("is-map-dragging");
+    }, 110);
   };
 
   const selected = useMemo(() => {

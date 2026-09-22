@@ -58,6 +58,41 @@ float categoryWinner(vec4 values, vec4 weights) {
   if (score > bestScore) best = values.w;
   return best;
 }
+// Four ownership samples are enough while the camera is moving. The previous
+// 4x4 cubic pass performed sixteen categorical texture lookups per screen
+// pixel and was the main source of dropped zoom/drag frames.
+float fastOwnerAt(vec2 uv, out vec2 sourceUv, out float margin) {
+  ivec2 size = textureSize(u_identity, 0);
+  vec2 position = safeUv(uv) * vec2(size) - vec2(.5);
+  ivec2 cell = ivec2(floor(position));
+  vec2 f = fract(position);
+  ivec2 ca = cell, cb = cell + ivec2(1, 0), cc = cell + ivec2(0, 1), cd = cell + ivec2(1, 1);
+  vec4 owners = vec4(rawIdentityAt(ca, size).x, rawIdentityAt(cb, size).x, rawIdentityAt(cc, size).x, rawIdentityAt(cd, size).x);
+  vec4 weights = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+  float winner = categoryWinner(owners, weights);
+  vec4 support = vec4(
+    dot(categoryMask(owners.x, owners), weights),
+    dot(categoryMask(owners.y, owners), weights),
+    dot(categoryMask(owners.z, owners), weights),
+    dot(categoryMask(owners.w, owners), weights)
+  );
+  float best = 0.0, second = 0.0;
+  for (int candidate = 0; candidate < 4; candidate++) {
+    float score = support[candidate];
+    if (abs(owners[candidate] - winner) < .1) best = max(best, score);
+    else second = max(second, score);
+  }
+  margin = max(0.0, best - second);
+  int corner = 0;
+  float peak = owners.x == winner ? weights.x : -1.0;
+  if (owners.y == winner && weights.y > peak) { corner = 1; peak = weights.y; }
+  if (owners.z == winner && weights.z > peak) { corner = 2; peak = weights.z; }
+  if (owners.w == winner && weights.w > peak) corner = 3;
+  ivec2 chosen = corner == 0 ? ca : corner == 1 ? cb : corner == 2 ? cc : cd;
+  chosen = safeTexel(chosen, size);
+  sourceUv = (vec2(chosen) + vec2(.5)) / vec2(size);
+  return winner;
+}
 vec4 cubicWeights(float value) {
   float inverse = 1.0 - value;
   float value2 = value * value;
@@ -158,7 +193,7 @@ void main() {
     vec4 movingColour;
     if (u_zoom < 2.15) movingColour = texture(u_map, world);
     else {
-      smoothedOwnerAt(world, movingSourceUv, movingMargin);
+      fastOwnerAt(world, movingSourceUv, movingMargin);
       movingColour = texture(u_map, movingSourceUv);
       float movingLine = 1.0 - smoothstep(0.0, max(.0001, fwidth(movingMargin) * 1.35), movingMargin);
       movingColour.rgb = mix(movingColour.rgb, vec3(.012, .045, .058), .9 * movingLine);
