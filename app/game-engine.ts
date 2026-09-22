@@ -484,6 +484,9 @@ const MAP_PALETTE: Array<[number, number, number]> = [
   [106, 171, 198],
   [185, 157, 80],
 ];
+const MAP_ROOM_SATURATION = 0.45;
+const MAP_ROOM_BRIGHTNESS = 0.72;
+const MAP_ROOM_LIFT = 10;
 
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   s /= 100;
@@ -5289,7 +5292,7 @@ export class WorldEngine {
           pixels[pixel] = r; pixels[pixel + 1] = g; pixels[pixel + 2] = b;
         } else if (owner < 0) {
           const wave = ((sourceX * 13 + sourceY * 7) % 17) / 17;
-          pixels[pixel] = 7; pixels[pixel + 1] = 29 + Math.round(wave * 5); pixels[pixel + 2] = 45 + Math.round(wave * 8);
+          pixels[pixel] = 7; pixels[pixel + 1] = 17 + Math.round(wave * 3); pixels[pixel + 2] = 24 + Math.round(wave * 5);
         } else {
           const [r, g, b] = this.countries[owner].color, texture = (((sourceX * 17 + sourceY * 31 + owner * 11) % 13) - 6) * 0.55;
           const glow = sourceFlash?.[source] ? 18 : owner === selected ? 10 : 0;
@@ -5299,9 +5302,13 @@ export class WorldEngine {
           const baseR = r * (1 - mix) + (flag?.[0] ?? r) * mix;
           const baseG = g * (1 - mix) + (flag?.[1] ?? g) * mix;
           const baseB = b * (1 - mix) + (flag?.[2] ?? b) * mix;
-          pixels[pixel] = Math.min(255, Math.max(0, (baseR + texture + glow) * fade + (playable ? 0 : 8)));
-          pixels[pixel + 1] = Math.min(255, Math.max(0, (baseG + texture + glow) * fade + (playable ? 0 : 18)));
-          pixels[pixel + 2] = Math.min(255, Math.max(0, (baseB + texture + glow * 0.3) * fade + (playable ? 0 : 23)));
+          const luminance = baseR * .2126 + baseG * .7152 + baseB * .0722;
+          const roomR = (luminance + (baseR - luminance) * MAP_ROOM_SATURATION) * MAP_ROOM_BRIGHTNESS + MAP_ROOM_LIFT;
+          const roomG = (luminance + (baseG - luminance) * MAP_ROOM_SATURATION) * MAP_ROOM_BRIGHTNESS + MAP_ROOM_LIFT;
+          const roomB = (luminance + (baseB - luminance) * MAP_ROOM_SATURATION) * MAP_ROOM_BRIGHTNESS + MAP_ROOM_LIFT;
+          pixels[pixel] = Math.min(255, Math.max(0, (roomR + texture + glow) * fade + (playable ? 0 : 8)));
+          pixels[pixel + 1] = Math.min(255, Math.max(0, (roomG + texture + glow) * fade + (playable ? 0 : 18)));
+          pixels[pixel + 2] = Math.min(255, Math.max(0, (roomB + texture + glow * 0.3) * fade + (playable ? 0 : 23)));
         }
         pixels[pixel + 3] = 255;
       }

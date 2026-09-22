@@ -2810,10 +2810,15 @@ test("War only country search and the mobile ranking layout stay wired into the 
 test("the Map Room layout keeps the map, command dock and ranking ticker wired together", () => {
   const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  const engine = readFileSync(new URL("../app/game-engine.ts", import.meta.url), "utf8");
   assert.ok(page.includes("map-room-classic"));
   assert.ok(page.includes('className="ranking-ticker"'));
   assert.ok(page.includes("sortedRanking.filter((entry) => entry.active).slice(0, 8)"));
+  assert.ok(page.includes("infoPanelOpen"));
   assert.ok(css.includes(".map-room-classic .wheel-grid{position:absolute"));
   assert.ok(css.includes(".ranking-ticker-track{display:flex"));
+  assert.ok(css.includes(".map-room .world-map{filter:none}"));
+  assert.ok(css.includes(".map-room *{backdrop-filter:none!important}"));
+  assert.ok(engine.includes("MAP_ROOM_SATURATION"));
   assert.ok(css.includes("@media(max-width:900px)"));
 });

@@ -147,7 +147,9 @@ type Gesture = {
   frame: { left: number; top: number; width: number; height: number } | null;
   moved: boolean;
   hadMulti: boolean;
+  lowResolution: boolean;
 };
+const INTERACTIVE_RENDER_RATIO = .5;
 const stageOrder: TurnStage[] = ["country", "action", "direction", "size", "apply"];
 const stageLabels: Record<TurnStage, string> = {
   country: "LOSUJ KRAJ",
@@ -324,6 +326,7 @@ export default function Home() {
   const [cataclysmOption, setCataclysmOption] = useState(false);
   const [partialWarning, setPartialWarning] = useState<string | null>(null);
   const [sidePanel, setSidePanel] = useState<SidePanel>("history");
+  const [infoPanelOpen, setInfoPanelOpen] = useState(false);
   const [rankingSort, setRankingSort] = useState<{ key: RankingSortKey; direction: "asc" | "desc" }>({ key: "rank", direction: "asc" });
   const [expandedRankingCountryId, setExpandedRankingCountryId] = useState<number | null>(null);
   const [autoRunning, setAutoRunning] = useState(false);
@@ -356,7 +359,7 @@ export default function Home() {
   const labelViewKeyRef = useRef("");
   const backdropKeyRef = useRef("");
   const fallbackBorderZoomRef = useRef(-1);
-  const gestureRef = useRef<Gesture>({ points: new Map(), last: null, pinch: null, frame: null, moved: false, hadMulti: false });
+  const gestureRef = useRef<Gesture>({ points: new Map(), last: null, pinch: null, frame: null, moved: false, hadMulti: false, lowResolution: false });
 
   useEffect(() => { speedRef.current = speed; }, [speed]);
 
@@ -470,13 +473,8 @@ export default function Home() {
     setZoom(zoomRef.current);
     setPan({ ...panRef.current });
     setHover(null);
-    const renderer = mapRendererRef.current;
-    const rect = mapRef.current?.getBoundingClientRect();
-    if (renderer?.screenSpaceBorders && rect) {
-      const focusedRegionId = strategicTargetId ?? inspectedSectorId;
-      renderer.draw({ zoom: zoomRef.current, panX: panRef.current.x / Math.max(1, rect.width), panY: -panRef.current.y / Math.max(1, rect.height), selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1, selectedRegion: focusedRegionId === null ? 0 : focusedRegionId + 1 });
-    } else paintRef.current();
-  }, [inspectedSectorId, strategicTargetId]);
+    paintRef.current();
+  }, []);
 
   const zoomBy = useCallback((delta: number) => {
     applyView(zoomRef.current + delta, panRef.current);
@@ -1124,7 +1122,7 @@ export default function Home() {
     setDraft({}); setStage("country"); setBattleFx(null); setWarReport(null); setPlayerAlarm(null); engine.reset(); selectedRef.current = null; setSelectedId(null); activeTurnRef.current = null; setActiveTurnId(null); highlightRef.current = [];
     refresh(engine); try { localStorage.removeItem(STORAGE_KEY); } catch { /* storage can be unavailable */ } setWheels({ country: "—", action: "—", direction: "—", size: "—" });
     engine.setMicrostateRule("all");
-    setGameMode(null); setGameRegion(null); setPendingMode(null); setPendingRegion(null); setPlayerCountryId(null); setStrategicTargetId(null); setMicrostateRule("all"); setSeedInput(""); setSidePanel("history"); setSpeed(4); setPhase("Wybierz tryb nowej rozgrywki"); setMenu(false); resetView(); paint();
+    setGameMode(null); setGameRegion(null); setPendingMode(null); setPendingRegion(null); setPlayerCountryId(null); setStrategicTargetId(null); setMicrostateRule("all"); setSeedInput(""); setSidePanel("history"); setInfoPanelOpen(false); setSpeed(4); setPhase("Wybierz tryb nowej rozgrywki"); setMenu(false); resetView(); paint();
   };
 
   const saveFile = () => {
@@ -1236,6 +1234,14 @@ export default function Home() {
     const previous = gesture.points.get(event.pointerId);
     if (previous) {
       event.preventDefault();
+      if (!gesture.lowResolution) {
+        const renderer = mapRendererRef.current;
+        const frame = gesture.frame;
+        if (renderer?.screenSpaceBorders && frame) {
+          renderer.resize(frame.width, frame.height, INTERACTIVE_RENDER_RATIO);
+          gesture.lowResolution = true;
+        }
+      }
       const current = { x: event.clientX, y: event.clientY };
       gesture.points.set(event.pointerId, current);
       if (gesture.points.size === 1) {
@@ -1312,6 +1318,7 @@ export default function Home() {
       gesture.frame = null;
       gesture.moved = false;
       gesture.hadMulti = false;
+      gesture.lowResolution = false;
     }
   };
 
@@ -1564,6 +1571,7 @@ export default function Home() {
         <a className="brand" href="#top"><span className="brand-mark"><i /><i /></span><span><strong>LOSY ŚWIATA</strong><small>atlas przemian</small></span></a>
         <div className="world-status"><span><b>{turn}</b> tura</span><span><b>{activeCountries}</b> państw</span>{gameMode && <span><b>{gameMode === "war" ? "WAR ONLY" : gameMode === "strategy" ? "STRATEGICZNY" : "PEŁNY"}</b> tryb</span>}{cataclysmIn !== null && <span title="Kataklizm zalewa niziny całego świata co 40 tur">🌊 kataklizm za <b>{cataclysmIn} tur</b></span>}{warGuarantee && <span title="Gwarancja obronna: ten kraj traci o połowę mniej">🛡 <b>{engine?.getCountry(warGuarantee.countryId)?.name ?? "—"}</b> · {warGuarantee.turnsLeft} tur</span>}<span className={`status ${busy ? "rolling" : "ready"}`}><i />{autoRunning ? `AUTO${typeof autoRemaining === "number" ? ` · ${autoRemaining}` : ""}` : busy ? "TRWA RUNDA" : gameMode === "strategy" ? "DOWÓDZTWO" : `KROK ${stageOrder.indexOf(stage) + 1}/5`}</span></div>
         <div className="top-actions">
+          <button className="text-button" onClick={() => { setSidePanel("history"); setInfoPanelOpen(true); }}>Dziennik</button>
           <button className="text-button" onClick={() => setRules(true)}>Zasady</button>
           <div className="menu-wrap"><button className="icon-button" aria-label="Menu zapisu i eksportu" aria-expanded={menu} onClick={() => setMenu((value) => !value)}>•••</button>
             {menu && <div className="export-menu">
@@ -1595,7 +1603,7 @@ export default function Home() {
 
       <section className="game-layout">
         <div className="map-column">
-          <header className="map-heading"><div><span className="eyebrow">{mapStyle === "relief" ? "MAPA GEOGRAFICZNA" : "MAPA POLITYCZNA"} · {gameRegion ? regionLabels[gameRegion].toUpperCase() : "STAN NA ŻYWO"}</span><button className="seed-inline" disabled={!engine} title="Kliknij, aby skopiować seed tej rozgrywki" onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}>seed <b>{engine?.seed ?? "—"}</b> ⧉</button>{landRatio !== null && <span className="land-ratio" title="Ile lądu zostało względem początku świata. Gdy ubywa, gra częściej losuje nowy ląd, gdy przybywa, częściej erozję."><small>LĄD</small><i><b style={{ width: `${Math.min(100, Math.max(0, Math.round(landRatio * 100)))}%` }} /></i><em>{Math.round(landRatio * 100)}%</em></span>}<h1>{last ? `Tura ${last.turn}: ${last.countryName}` : "Świat przed pierwszą turą"}</h1></div><div className="map-legend"><span><i className="change" /> ostatnia zmiana</span><span><i className="border" /> granica</span></div></header>
+          <header className="map-heading"><div><span className="eyebrow">{mapStyle === "relief" ? "MAPA GEOGRAFICZNA" : "MAPA POLITYCZNA"} · {gameRegion ? regionLabels[gameRegion].toUpperCase() : "STAN NA ŻYWO"}</span><button className="seed-inline" disabled={!engine} title="Kliknij, aby skopiować seed tej rozgrywki" onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}>seed <b>{engine?.seed ?? "—"}</b> ⧉</button>{landRatio !== null && <span className="land-ratio" title="Ile lądu zostało względem początku świata. Gdy ubywa, gra częściej losuje nowy ląd, gdy przybywa, częściej erozję."><small>LĄD</small><i><b style={{ width: `${Math.min(100, Math.max(0, Math.round(landRatio * 100)))}%` }} /></i><em>{Math.round(landRatio * 100)}%</em></span>}<h1>{last ? `Tura ${last.turn}: ${last.countryName}` : "Świat przed pierwszą turą"}</h1></div></header>
           <div className="map-frame" ref={mapRef} onContextMenu={(event) => { event.preventDefault(); setSelectedId(null); }}>
             {!ready && <div className="map-loader"><div className="loader-globe" /><span>{phase}</span></div>}
             <canvas ref={backdropRef} className="map-source" aria-hidden="true" />
@@ -1755,11 +1763,12 @@ export default function Home() {
             </div>
             <label className="major-toggle"><input type="checkbox" checked={pauseOnMajor} disabled={autoRunning} onChange={(event) => setPauseOnMajor(event.target.checked)} /> Pauza po eliminacji lub wyniku ALL</label>
           </div></>}
-          <div className="history-panel world-panel">
+          <div className={`history-panel world-panel ${infoPanelOpen ? "open" : ""}`}>
             <nav className="panel-tabs" aria-label="Informacje o świecie">
               <button className={sidePanel === "history" ? "active" : ""} onClick={() => setSidePanel("history")}>Historia</button>
               <button className={sidePanel === "ranking" ? "active" : ""} onClick={() => setSidePanel("ranking")}>Ranking</button>
               <button className={sidePanel === "chronicle" ? "active" : ""} onClick={() => setSidePanel("chronicle")}>Kronika</button>
+              <button className="panel-close" onClick={() => setInfoPanelOpen(false)} aria-label="Zamknij panel">×</button>
             </nav>
             {sidePanel === "history" && <><header><h3>Historia świata</h3><span>{history.length ? `${history.length} ostatnich zdarzeń` : "brak zdarzeń"}</span></header><div className="history-list">{history.length ? history.slice(0, 12).map((record) => <History key={`${record.turn}-${record.countryId}${record.cataclysm ? "-kataklizm" : ""}`} record={record} />) : <div className="empty-history"><span>◇</span><p>Pierwsza zmiana granic pojawi się tutaj po rozegraniu tury.</p></div>}</div></>}
             {sidePanel === "ranking" && <>
@@ -1799,13 +1808,13 @@ export default function Home() {
       </section>
 
       {gameMode && <section className="ranking-ticker" aria-label="Czołówka rankingu państw">
-        <button className="ranking-ticker-label" onClick={() => setSidePanel("ranking")}><span>RANKING</span><small>pełna tabela</small></button>
+        <button className="ranking-ticker-label" onClick={() => { setSidePanel("ranking"); setInfoPanelOpen(true); }}><span>RANKING</span><small>pełna tabela</small></button>
         <div className="ranking-ticker-track">
           {sortedRanking.filter((entry) => entry.active).slice(0, 8).map((entry) => <button key={entry.countryId} onClick={() => { setSelectedId(entry.countryId); focusCountry(entry.countryId); }}>
             <b>{entry.rank}</b><span>{entry.flag}</span><strong>{entry.name}</strong><em>{gameMode === "strategy" ? `${entry.strength?.rating ?? 0}/100` : formatArea(entry.areaKm2)}</em>
           </button>)}
         </div>
-        <button className="ranking-ticker-more" onClick={() => setSidePanel("ranking")} aria-label="Otwórz pełny ranking">↗</button>
+        <button className="ranking-ticker-more" onClick={() => { setSidePanel("ranking"); setInfoPanelOpen(true); }} aria-label="Otwórz pełny ranking">↗</button>
       </section>}
 
       <footer className="app-footer"><span>Mapa zapisuje się automatycznie na tym urządzeniu</span><span className="terrain-credit">Prowincje: Natural Earth Admin‑1 · Wysokości: ETOPO1/GMTED2010</span><button className="seed-copy" disabled={!engine} onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}>Seed świata: <b>{engine?.seed ?? "—"}</b> ⧉</button></footer>

@@ -369,6 +369,7 @@
 html{background:#080c0f}
 body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,sans-serif}
 .map-room{min-height:100dvh;background:radial-gradient(circle at 50% -20%,rgba(97,120,118,.1),transparent 38rem),#080c0f}
+.map-room *{backdrop-filter:none!important}
 .map-room .topbar{min-height:68px;padding:0 22px;border-color:rgba(255,255,255,.07);background:rgba(8,12,15,.91);box-shadow:0 12px 34px rgba(0,0,0,.28)}
 .map-room .brand{gap:10px}
 .map-room .brand-mark{width:32px;height:32px;border-radius:8px;border-color:rgba(200,135,93,.54);background:#151c20;transform:rotate(-2deg)}
@@ -377,10 +378,10 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
 .map-room .world-status{gap:22px;font-size:9px;letter-spacing:.1em}
 .map-room .status i{background:#829f94;box-shadow:none}
 .map-room .text-button,.map-room .icon-button{border-radius:6px}
-.map-room .world-map{filter:saturate(.7) brightness(.8) contrast(1.08)}
+.map-room .world-map{filter:none}
 .map-room .map-shade{background:linear-gradient(90deg,rgba(3,7,9,.2),transparent 16%,transparent 80%,rgba(3,7,9,.3)),linear-gradient(rgba(3,7,9,.08),transparent 42%,rgba(3,7,9,.26))}
 .map-room .map-frame{border-color:rgba(255,255,255,.08);border-radius:10px;background:#09151b;box-shadow:0 28px 80px rgba(0,0,0,.4)}
-.map-room .map-heading,.map-room .control-heading,.map-room .history-panel.world-panel,.map-room-classic .wheel-grid,.map-room-classic .primary-controls{border:1px solid rgba(255,255,255,.1);background:rgba(13,18,21,.84);box-shadow:0 16px 42px rgba(0,0,0,.34);backdrop-filter:blur(18px)}
+.map-room .map-heading,.map-room .control-heading,.map-room .history-panel.world-panel,.map-room-classic .wheel-grid,.map-room-classic .primary-controls{border:1px solid rgba(255,255,255,.1);background:#11171a;box-shadow:0 16px 42px rgba(0,0,0,.34)}
 .map-room .eyebrow{color:#ca8c65;letter-spacing:.14em}
 .map-room .turn-button{border-color:#d09a75;border-radius:7px;background:linear-gradient(180deg,#d39a72,#b9744e);box-shadow:0 12px 28px rgba(112,56,30,.22),inset 0 1px rgba(255,255,255,.28);color:#171311}
 .map-room .wheel-card{border-radius:7px;background:linear-gradient(150deg,rgba(255,255,255,.035),transparent 55%),rgba(19,26,29,.92)}
@@ -391,14 +392,16 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
 .map-room-classic .game-layout{position:relative;display:block;width:100%;height:calc(100dvh - 126px);margin:0;padding:0}
 .map-room-classic .map-column{position:absolute;inset:0;min-width:0}
 .map-room-classic .map-frame{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;border-width:0;border-radius:0}
-.map-room-classic .map-heading{position:absolute;z-index:18;top:18px;left:72px;display:flex;width:min(620px,calc(100% - 470px));min-height:0;margin:0;padding:12px 14px;border-radius:8px;align-items:center}
-.map-room-classic .map-heading h1{max-width:440px;font-size:19px;font-weight:720}
+.map-room-classic .map-heading{position:absolute;z-index:18;top:18px;left:72px;display:flex;width:min(380px,calc(100% - 440px));min-height:0;margin:0;padding:9px 11px;border-radius:7px;align-items:center}
+.map-room-classic .map-heading>div{display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:0 9px}
+.map-room-classic .map-heading .eyebrow{width:100%}
+.map-room-classic .map-heading h1{order:2;overflow:hidden;width:100%;max-width:400px;margin-top:2px;font-size:15px;font-weight:720;text-overflow:ellipsis;white-space:nowrap}
 .map-room-classic .map-legend{display:none}
-.map-room-classic .map-footer{position:absolute;z-index:18;top:94px;left:72px;display:block;width:min(520px,calc(100% - 460px));min-height:0;padding:0}
-.map-room-classic .phase-line{width:max-content;max-width:100%;min-height:34px;padding:0 12px;border:1px solid rgba(255,255,255,.09);border-radius:7px;background:rgba(10,15,18,.76);box-shadow:0 10px 26px rgba(0,0,0,.24);backdrop-filter:blur(12px)}
+.map-room-classic .map-footer{position:absolute;z-index:18;top:104px;left:72px;display:block;width:min(380px,calc(100% - 440px));min-height:0;padding:0}
+.map-room-classic .phase-line{width:max-content;max-width:100%;min-height:32px;padding:0 10px;border:1px solid rgba(255,255,255,.09);border-radius:6px;background:#0d1316;box-shadow:0 10px 26px rgba(0,0,0,.24)}
 .map-room-classic .selected-country{display:none}
 .map-room-classic .zoom-controls{top:158px;right:auto;left:18px;grid-template-columns:38px}
-.map-room-classic .zoom-controls button{width:38px;height:38px;border-radius:7px;background:rgba(11,16,19,.84);backdrop-filter:blur(12px)}
+.map-room-classic .zoom-controls button{width:38px;height:38px;border-radius:7px;background:#0d1418}
 .map-room-classic .zoom-controls>span{grid-column:1;width:38px;padding:6px 2px;text-align:center}
 .map-room-classic .zoom-hint{top:410px;right:auto;left:18px;width:38px;max-width:38px;writing-mode:vertical-rl}
 .map-room-classic .country-dossier{top:90px;bottom:190px;left:72px}
@@ -406,8 +409,8 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
 
 .map-room-classic .controls{position:absolute;z-index:20;inset:0;display:block;min-width:0;pointer-events:none}
 .map-room-classic .controls>*{pointer-events:auto}
-.map-room-classic .control-heading{position:absolute;top:18px;right:18px;width:350px;min-height:0;margin:0;padding:10px 12px;border-radius:8px;align-items:center}
-.map-room-classic .control-heading h2{font-size:15px}
+.map-room-classic .control-heading{position:absolute;top:18px;right:18px;width:310px;min-height:0;margin:0;padding:7px 9px;border-radius:7px;align-items:center}
+.map-room-classic .control-heading h2{display:none}
 .map-room-classic .wheel-grid{position:absolute;right:auto;bottom:86px;left:50%;display:grid;width:min(780px,calc(100% - 120px));grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;padding:6px;border-radius:9px;transform:translateX(-50%)}
 .map-room-classic .wheel-card{min-height:62px;padding:8px 9px 8px 10px;grid-template-columns:38px minmax(0,1fr)}
 .map-room-classic .wheel-orbit{width:31px;height:31px;font-size:14px}
@@ -419,7 +422,10 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
 .map-room-classic .secondary-controls{grid-template-columns:minmax(0,1fr) auto}
 .map-room-classic .secondary-controls button,.map-room-classic .auto-controls button{min-height:40px;background:rgba(255,255,255,.025)}
 .map-room-classic .major-toggle{min-height:40px;padding:0 8px;border-left:1px solid var(--line);line-height:1.35}
-.map-room-classic .history-panel.world-panel{position:absolute;z-index:21;top:84px;right:18px;display:flex;width:350px;max-height:min(390px,calc(100% - 290px));min-height:180px;margin:0;padding:10px;border-radius:8px;overflow:hidden}
+.map-room-classic .history-panel.world-panel{position:absolute;z-index:21;top:76px;right:18px;display:flex;width:360px;max-height:min(520px,calc(100% - 170px));min-height:180px;margin:0;padding:10px;border-radius:8px;overflow:hidden;opacity:0;pointer-events:none;transform:translateX(calc(100% + 28px));transition:opacity .18s ease,transform .18s ease}
+.map-room-classic .history-panel.world-panel.open{opacity:1;pointer-events:auto;transform:none}
+.map-room .panel-tabs{grid-template-columns:repeat(3,1fr) 32px}
+.map-room .panel-tabs .panel-close{font-size:16px}
 .map-room-classic .history-panel .history-list,.map-room-classic .history-panel .ranking-list{max-height:300px;min-height:100px}
 .map-room-classic .player-alarm,.map-room-classic .partial-warning{position:absolute;z-index:22;top:94px;left:50%;width:min(480px,calc(100% - 780px));margin:0;transform:translateX(-50%)}
 .map-room-classic .app-footer{display:none}
@@ -446,7 +452,7 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
 .map-room-strategy .app-footer{padding-top:2px}
 
 @media(max-width:1180px) and (min-width:901px){
-  .map-room-classic .map-heading{width:min(530px,calc(100% - 390px))}
+  .map-room-classic .map-heading{width:min(360px,calc(100% - 360px))}
   .map-room-classic .control-heading,.map-room-classic .history-panel.world-panel{right:12px;width:315px}
   .map-room-classic .history-panel.world-panel{max-height:330px}
   .map-room-classic .primary-controls{width:calc(100% - 36px);grid-template-columns:minmax(210px,1.1fr) 130px minmax(190px,.9fr) 130px}
@@ -472,7 +478,8 @@ body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,
   .map-room-classic .primary-controls{order:2;display:grid;grid-template-columns:1fr 1fr;padding:7px}
   .map-room-classic .turn-button{grid-column:1/-1}
   .map-room-classic .major-toggle{border-left:0}
-  .map-room-classic .history-panel.world-panel{order:3;min-height:230px;padding:10px}
+  .map-room-classic .history-panel.world-panel{display:none;order:3;min-height:230px;padding:10px;opacity:1;pointer-events:auto}
+  .map-room-classic .history-panel.world-panel.open{display:flex}
   .map-room-classic .history-panel .history-list,.map-room-classic .history-panel .ranking-list{max-height:55dvh}
   .map-room-classic .player-alarm,.map-room-classic .partial-warning{position:static;width:auto;transform:none}
   .map-room-classic .zoom-controls{top:8px;right:8px;left:auto;grid-template-columns:repeat(4,34px) 48px}
