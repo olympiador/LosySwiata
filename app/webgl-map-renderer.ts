@@ -58,6 +58,56 @@ float categoryWinner(vec4 values, vec4 weights) {
   if (score > bestScore) best = values.w;
   return best;
 }
+vec4 cubicWeights(float value) {
+  float inverse = 1.0 - value;
+  float value2 = value * value;
+  float value3 = value2 * value;
+  return vec4(
+    inverse * inverse * inverse,
+    3.0 * value3 - 6.0 * value2 + 4.0,
+    -3.0 * value3 + 3.0 * value2 + 3.0 * value + 1.0,
+    value3
+  ) / 6.0;
+}
+// A four-texel cubic footprint removes the staircase created when the
+// simulation grid is magnified. Only the four labels touching the fragment
+// can win, so a border stays categorical and never invents a new country.
+float smoothedOwnerAt(vec2 uv, out vec2 sourceUv, out float margin) {
+  ivec2 size = textureSize(u_identity, 0);
+  vec2 position = safeUv(uv) * vec2(size) - vec2(.5);
+  ivec2 cell = ivec2(floor(position));
+  vec2 fraction = fract(position);
+  ivec2 ca = cell, cb = cell + ivec2(1, 0), cc = cell + ivec2(0, 1), cd = cell + ivec2(1, 1);
+  vec4 candidates = vec4(rawIdentityAt(ca, size).x, rawIdentityAt(cb, size).x, rawIdentityAt(cc, size).x, rawIdentityAt(cd, size).x);
+  vec4 wx = cubicWeights(fraction.x), wy = cubicWeights(fraction.y);
+  vec4 support = vec4(0.0);
+  for (int row = 0; row < 4; row++) {
+    for (int column = 0; column < 4; column++) {
+      float owner = rawIdentityAt(cell + ivec2(column - 1, row - 1), size).x;
+      support += categoryMask(owner, candidates) * wx[column] * wy[row];
+    }
+  }
+  float winner = candidates.x, best = support.x;
+  if (support.y > best) { winner = candidates.y; best = support.y; }
+  if (support.z > best) { winner = candidates.z; best = support.z; }
+  if (support.w > best) { winner = candidates.w; best = support.w; }
+  float second = 0.0;
+  if (abs(candidates.x - winner) > .1) second = max(second, support.x);
+  if (abs(candidates.y - winner) > .1) second = max(second, support.y);
+  if (abs(candidates.z - winner) > .1) second = max(second, support.z);
+  if (abs(candidates.w - winner) > .1) second = max(second, support.w);
+  margin = max(0.0, best - second);
+
+  vec4 bilinear = vec4((1.0 - fraction.x) * (1.0 - fraction.y), fraction.x * (1.0 - fraction.y), (1.0 - fraction.x) * fraction.y, fraction.x * fraction.y);
+  ivec2 chosen = ca;
+  float peak = candidates.x == winner ? bilinear.x : -1.0;
+  if (candidates.y == winner && bilinear.y > peak) { chosen = cb; peak = bilinear.y; }
+  if (candidates.z == winner && bilinear.z > peak) { chosen = cc; peak = bilinear.z; }
+  if (candidates.w == winner && bilinear.w > peak) chosen = cd;
+  chosen = safeTexel(chosen, size);
+  sourceUv = (vec2(chosen) + vec2(.5)) / vec2(size);
+  return winner;
+}
 // Reconstruct categorical borders between cell centres. This is a multi-label
 // marching-squares pass: ownership, province and district are resolved in
 // order, so smoothing never leaks a province into another country.
@@ -114,12 +164,14 @@ void main() {
   }
   vec2 identityUv;
   vec3 currentIdentity = visualIdsAt(world, identityUv);
-  // Both textures describe the same projected map. Sampling the political
-  // colour from a different, chosen corner of the identity texture made large
-  // rectangular colour patches slip over otherwise correct country borders.
-  // The map texture is nearest-filtered, so this direct coordinate lookup
-  // remains crisp while staying exactly registered with the border texture.
-  vec4 base = texture(u_map, world);
+  float rawCurrentOwner = currentIdentity.r;
+  float ownerMargin = 1.0;
+  vec2 ownerSourceUv = identityUv;
+  if (u_zoom >= 2.15) currentIdentity.r = smoothedOwnerAt(world, ownerSourceUv, ownerMargin);
+  // At close range the colour comes from a texel belonging to the smoothed
+  // winner. This keeps fills solid while their contour follows the cubic
+  // reconstruction instead of the square simulation cells.
+  vec4 base = texture(u_map, u_zoom < 2.15 ? world : ownerSourceUv);
   vec4 outline = texture(u_outline, world);
   vec3 colour = mix(base.rgb, outline.rgb, outline.a);
   vec2 screenStep = vec2(1.0 / max(1.0, u_viewSize.x * u_zoom), 1.0 / max(1.0, u_viewSize.y * u_zoom));
@@ -128,18 +180,18 @@ void main() {
   vec3 rightIdentity = visualIdsAt(world + vec2(screenStep.x * .72, 0.0), ignored);
   vec3 topIdentity = visualIdsAt(world - vec2(0.0, screenStep.y * .72), ignored);
   vec3 bottomIdentity = visualIdsAt(world + vec2(0.0, screenStep.y * .72), ignored);
-  bool ownerBoundary = ((leftIdentity.r != currentIdentity.r) && (leftIdentity.r > 0.0 || currentIdentity.r > 0.0)) ||
-    ((rightIdentity.r != currentIdentity.r) && (rightIdentity.r > 0.0 || currentIdentity.r > 0.0)) ||
-    ((topIdentity.r != currentIdentity.r) && (topIdentity.r > 0.0 || currentIdentity.r > 0.0)) ||
-    ((bottomIdentity.r != currentIdentity.r) && (bottomIdentity.r > 0.0 || currentIdentity.r > 0.0));
-  bool regionBoundary = currentIdentity.g > 0.0 && ((leftIdentity.r == currentIdentity.r && leftIdentity.g > 0.0 && leftIdentity.g != currentIdentity.g) ||
-    (rightIdentity.r == currentIdentity.r && rightIdentity.g > 0.0 && rightIdentity.g != currentIdentity.g) ||
-    (topIdentity.r == currentIdentity.r && topIdentity.g > 0.0 && topIdentity.g != currentIdentity.g) ||
-    (bottomIdentity.r == currentIdentity.r && bottomIdentity.g > 0.0 && bottomIdentity.g != currentIdentity.g));
-  bool adminBoundary = currentIdentity.b > 0.0 && ((leftIdentity.r == currentIdentity.r && leftIdentity.b > 0.0 && leftIdentity.b != currentIdentity.b) ||
-    (rightIdentity.r == currentIdentity.r && rightIdentity.b > 0.0 && rightIdentity.b != currentIdentity.b) ||
-    (topIdentity.r == currentIdentity.r && topIdentity.b > 0.0 && topIdentity.b != currentIdentity.b) ||
-    (bottomIdentity.r == currentIdentity.r && bottomIdentity.b > 0.0 && bottomIdentity.b != currentIdentity.b));
+  bool ownerBoundary = ((leftIdentity.r != rawCurrentOwner) && (leftIdentity.r > 0.0 || rawCurrentOwner > 0.0)) ||
+    ((rightIdentity.r != rawCurrentOwner) && (rightIdentity.r > 0.0 || rawCurrentOwner > 0.0)) ||
+    ((topIdentity.r != rawCurrentOwner) && (topIdentity.r > 0.0 || rawCurrentOwner > 0.0)) ||
+    ((bottomIdentity.r != rawCurrentOwner) && (bottomIdentity.r > 0.0 || rawCurrentOwner > 0.0));
+  bool regionBoundary = currentIdentity.g > 0.0 && ((leftIdentity.r == rawCurrentOwner && leftIdentity.g > 0.0 && leftIdentity.g != currentIdentity.g) ||
+    (rightIdentity.r == rawCurrentOwner && rightIdentity.g > 0.0 && rightIdentity.g != currentIdentity.g) ||
+    (topIdentity.r == rawCurrentOwner && topIdentity.g > 0.0 && topIdentity.g != currentIdentity.g) ||
+    (bottomIdentity.r == rawCurrentOwner && bottomIdentity.g > 0.0 && bottomIdentity.g != currentIdentity.g));
+  bool adminBoundary = currentIdentity.b > 0.0 && ((leftIdentity.r == rawCurrentOwner && leftIdentity.b > 0.0 && leftIdentity.b != currentIdentity.b) ||
+    (rightIdentity.r == rawCurrentOwner && rightIdentity.b > 0.0 && rightIdentity.b != currentIdentity.b) ||
+    (topIdentity.r == rawCurrentOwner && topIdentity.b > 0.0 && topIdentity.b != currentIdentity.b) ||
+    (bottomIdentity.r == rawCurrentOwner && bottomIdentity.b > 0.0 && bottomIdentity.b != currentIdentity.b));
   // Attack targets use a one-screen-pixel inner contour. It is deliberately
   // derived here rather than baked into the map texture, so 1200% zoom cannot
   // magnify a one-pixel line into a wide red band.
@@ -175,7 +227,10 @@ void main() {
 
   // Country borders are the only lines visible at the world/continent scale.
   // One narrow dark pass avoids the old double-sided gold "pipes".
-  if (ownerBoundary) colour = mix(colour, vec3(.012, .045, .058), .9);
+  float ownerLine = u_zoom < 2.15
+    ? (ownerBoundary ? 1.0 : 0.0)
+    : 1.0 - smoothstep(0.0, max(.0001, fwidth(ownerMargin) * 1.35), ownerMargin);
+  if (ownerLine > 0.0) colour = mix(colour, vec3(.012, .045, .058), .9 * ownerLine);
   // Focus is communicated by a gentle warm wash over the whole sector and a
   // A restrained steel-blue focus is visible over every political colour
   // without a broad glow or the former alarm-like red outline.
@@ -216,7 +271,6 @@ export class WebGLMapRenderer {
   private readonly panLocation: WebGLUniformLocation;
   private readonly viewSizeLocation: WebGLUniformLocation;
   private hasTexture = false;
-  private mapUsesNearest = true;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, desynchronized: true, powerPreference: "high-performance" });
@@ -281,11 +335,10 @@ export class WebGLMapRenderer {
   }
 
   upload(map: HTMLCanvasElement, outline: HTMLCanvasElement, identity?: HTMLCanvasElement, administrative?: HTMLCanvasElement, preprojected?: boolean) {
-    // Upload categorically. draw() switches the colour layer to linear
-    // filtering at world scale, where nearest sampling exposes the source
-    // grid, and restores exact sampling for close inspection.
-    this.uploadTexture(0, this.mapTexture, map, true);
-    this.mapUsesNearest = true;
+    // The categorical identity textures remain exact. The visible colour
+    // layer is linearly filtered so motion and coastlines never reveal the
+    // source raster; close-up ownership still comes from visualIdsAt().
+    this.uploadTexture(0, this.mapTexture, map);
     this.uploadTexture(1, this.outlineTexture, outline);
     if (identity) this.uploadTexture(2, this.identityTexture, identity, true);
     if (administrative) this.uploadTexture(3, this.administrativeTexture, administrative, true);
@@ -295,14 +348,6 @@ export class WebGLMapRenderer {
   draw({ zoom, panX, panY, selectedOwner = 0, selectedRegion = 0, interacting = false }: MapView) {
     if (!this.hasTexture) return;
     const gl = this.gl;
-    const useNearest = zoom >= 2.15;
-    if (useNearest !== this.mapUsesNearest) {
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, this.mapTexture);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, useNearest ? gl.NEAREST : gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, useNearest ? gl.NEAREST : gl.LINEAR);
-      this.mapUsesNearest = useNearest;
-    }
     gl.useProgram(this.program);
     gl.uniform1f(this.zoomLocation, zoom);
     gl.uniform1f(this.selectedOwnerLocation, selectedOwner);

@@ -2825,10 +2825,13 @@ test("the Map Room layout keeps the map, command dock and ranking ticker wired t
   assert.ok(css.includes("@media(max-width:900px)"));
 });
 
-test("world-scale GPU map is smoothed without reducing interaction resolution", () => {
+test("GPU map keeps full interaction resolution and reconstructed close-up contours", () => {
   const renderer = readFileSync(new URL("../app/webgl-map-renderer.ts", import.meta.url), "utf8");
   const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
-  assert.ok(renderer.includes("const useNearest = zoom >= 2.15"));
-  assert.ok(renderer.includes("useNearest ? gl.NEAREST : gl.LINEAR"));
+  assert.ok(renderer.includes("float smoothedOwnerAt"));
+  assert.ok(renderer.includes("cubicWeights"));
+  assert.ok(renderer.includes("u_zoom < 2.15 ? world : ownerSourceUv"));
+  assert.ok(renderer.includes("this.uploadTexture(0, this.mapTexture, map);"));
+  assert.ok(!renderer.includes("mapUsesNearest"));
   assert.ok(!page.includes("lowResolution"));
 });
