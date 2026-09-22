@@ -351,3 +351,158 @@
 @media(max-width:460px){
   .country-picker-grid{grid-template-columns:1fr}
 }
+
+/* Map Room — mapa jest planszą, a sterowanie unosi się nad nią jak stół dowodzenia. */
+:root{
+  --ink:#edf0ed;
+  --muted:#a2aaa7;
+  --muted2:#707977;
+  --ocean:#0a151c;
+  --panel:#11191d;
+  --line:rgba(214,220,214,.11);
+  --line2:rgba(214,220,214,.2);
+  --gold:#c8875d;
+  --teal:#729c94;
+  --red:#c66e68;
+  --shadow:0 24px 70px rgba(0,0,0,.48)
+}
+html{background:#080c0f}
+body{background:#080c0f;color:var(--ink);font-family:Inter,"Segoe UI",system-ui,sans-serif}
+.map-room{min-height:100dvh;background:radial-gradient(circle at 50% -20%,rgba(97,120,118,.1),transparent 38rem),#080c0f}
+.map-room .topbar{min-height:68px;padding:0 22px;border-color:rgba(255,255,255,.07);background:rgba(8,12,15,.91);box-shadow:0 12px 34px rgba(0,0,0,.28)}
+.map-room .brand{gap:10px}
+.map-room .brand-mark{width:32px;height:32px;border-radius:8px;border-color:rgba(200,135,93,.54);background:#151c20;transform:rotate(-2deg)}
+.map-room .brand strong{font-family:Inter,"Segoe UI",sans-serif;font-size:15px;font-weight:820;letter-spacing:.16em}
+.map-room .brand small{font-size:8px;letter-spacing:.19em}
+.map-room .world-status{gap:22px;font-size:9px;letter-spacing:.1em}
+.map-room .status i{background:#829f94;box-shadow:none}
+.map-room .text-button,.map-room .icon-button{border-radius:6px}
+.map-room .world-map{filter:saturate(.7) brightness(.8) contrast(1.08)}
+.map-room .map-shade{background:linear-gradient(90deg,rgba(3,7,9,.2),transparent 16%,transparent 80%,rgba(3,7,9,.3)),linear-gradient(rgba(3,7,9,.08),transparent 42%,rgba(3,7,9,.26))}
+.map-room .map-frame{border-color:rgba(255,255,255,.08);border-radius:10px;background:#09151b;box-shadow:0 28px 80px rgba(0,0,0,.4)}
+.map-room .map-heading,.map-room .control-heading,.map-room .history-panel.world-panel,.map-room-classic .wheel-grid,.map-room-classic .primary-controls{border:1px solid rgba(255,255,255,.1);background:rgba(13,18,21,.84);box-shadow:0 16px 42px rgba(0,0,0,.34);backdrop-filter:blur(18px)}
+.map-room .eyebrow{color:#ca8c65;letter-spacing:.14em}
+.map-room .turn-button{border-color:#d09a75;border-radius:7px;background:linear-gradient(180deg,#d39a72,#b9744e);box-shadow:0 12px 28px rgba(112,56,30,.22),inset 0 1px rgba(255,255,255,.28);color:#171311}
+.map-room .wheel-card{border-radius:7px;background:linear-gradient(150deg,rgba(255,255,255,.035),transparent 55%),rgba(19,26,29,.92)}
+.map-room .wheel-card.is-rolling{border-color:rgba(200,135,93,.62);background:linear-gradient(145deg,rgba(200,135,93,.14),rgba(19,26,29,.94));box-shadow:0 0 28px rgba(200,135,93,.1)}
+.map-room .panel-tabs button.active{background:rgba(200,135,93,.16);color:#e0a47c}
+.map-room .country-dossier{border-color:rgba(255,255,255,.14);border-radius:9px;background:linear-gradient(155deg,rgba(22,29,32,.98),rgba(9,14,17,.98));box-shadow:22px 0 56px rgba(0,0,0,.52)}
+
+.map-room-classic .game-layout{position:relative;display:block;width:100%;height:calc(100dvh - 126px);margin:0;padding:0}
+.map-room-classic .map-column{position:absolute;inset:0;min-width:0}
+.map-room-classic .map-frame{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;border-width:0;border-radius:0}
+.map-room-classic .map-heading{position:absolute;z-index:18;top:18px;left:72px;display:flex;width:min(620px,calc(100% - 470px));min-height:0;margin:0;padding:12px 14px;border-radius:8px;align-items:center}
+.map-room-classic .map-heading h1{max-width:440px;font-size:19px;font-weight:720}
+.map-room-classic .map-legend{display:none}
+.map-room-classic .map-footer{position:absolute;z-index:18;top:94px;left:72px;display:block;width:min(520px,calc(100% - 460px));min-height:0;padding:0}
+.map-room-classic .phase-line{width:max-content;max-width:100%;min-height:34px;padding:0 12px;border:1px solid rgba(255,255,255,.09);border-radius:7px;background:rgba(10,15,18,.76);box-shadow:0 10px 26px rgba(0,0,0,.24);backdrop-filter:blur(12px)}
+.map-room-classic .selected-country{display:none}
+.map-room-classic .zoom-controls{top:158px;right:auto;left:18px;grid-template-columns:38px}
+.map-room-classic .zoom-controls button{width:38px;height:38px;border-radius:7px;background:rgba(11,16,19,.84);backdrop-filter:blur(12px)}
+.map-room-classic .zoom-controls>span{grid-column:1;width:38px;padding:6px 2px;text-align:center}
+.map-room-classic .zoom-hint{top:410px;right:auto;left:18px;width:38px;max-width:38px;writing-mode:vertical-rl}
+.map-room-classic .country-dossier{top:90px;bottom:190px;left:72px}
+.map-room-classic .event-ribbon{right:auto;bottom:184px;left:50%;width:min(610px,calc(100% - 440px));transform:translateX(-50%)}
+
+.map-room-classic .controls{position:absolute;z-index:20;inset:0;display:block;min-width:0;pointer-events:none}
+.map-room-classic .controls>*{pointer-events:auto}
+.map-room-classic .control-heading{position:absolute;top:18px;right:18px;width:350px;min-height:0;margin:0;padding:10px 12px;border-radius:8px;align-items:center}
+.map-room-classic .control-heading h2{font-size:15px}
+.map-room-classic .wheel-grid{position:absolute;right:auto;bottom:86px;left:50%;display:grid;width:min(780px,calc(100% - 120px));grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;padding:6px;border-radius:9px;transform:translateX(-50%)}
+.map-room-classic .wheel-card{min-height:62px;padding:8px 9px 8px 10px;grid-template-columns:38px minmax(0,1fr)}
+.map-room-classic .wheel-orbit{width:31px;height:31px;font-size:14px}
+.map-room-classic .wheel-copy{gap:3px}
+.map-room-classic .wheel-copy strong,.map-room-classic .wheel-copy .wheel-value{font-size:10px}
+.map-room-classic .primary-controls{position:absolute;right:auto;bottom:14px;left:50%;display:grid;width:min(1000px,calc(100% - 100px));grid-template-columns:minmax(230px,1.25fr) minmax(130px,.7fr) minmax(210px,1fr) minmax(145px,.62fr);align-items:center;gap:6px;margin:0;padding:7px;border-radius:9px;transform:translateX(-50%)}
+.map-room-classic .turn-button{min-height:48px}
+.map-room-classic .secondary-controls,.map-room-classic .auto-controls,.map-room-classic .major-toggle{margin:0}
+.map-room-classic .secondary-controls{grid-template-columns:minmax(0,1fr) auto}
+.map-room-classic .secondary-controls button,.map-room-classic .auto-controls button{min-height:40px;background:rgba(255,255,255,.025)}
+.map-room-classic .major-toggle{min-height:40px;padding:0 8px;border-left:1px solid var(--line);line-height:1.35}
+.map-room-classic .history-panel.world-panel{position:absolute;z-index:21;top:84px;right:18px;display:flex;width:350px;max-height:min(390px,calc(100% - 290px));min-height:180px;margin:0;padding:10px;border-radius:8px;overflow:hidden}
+.map-room-classic .history-panel .history-list,.map-room-classic .history-panel .ranking-list{max-height:300px;min-height:100px}
+.map-room-classic .player-alarm,.map-room-classic .partial-warning{position:absolute;z-index:22;top:94px;left:50%;width:min(480px,calc(100% - 780px));margin:0;transform:translateX(-50%)}
+.map-room-classic .app-footer{display:none}
+
+.ranking-ticker{position:relative;z-index:24;display:grid;width:100%;min-height:58px;grid-template-columns:118px minmax(0,1fr) 42px;align-items:stretch;border-top:1px solid rgba(255,255,255,.09);background:#0d1215;box-shadow:0 -16px 38px rgba(0,0,0,.28)}
+.ranking-ticker button{border:0;background:transparent;color:inherit;cursor:pointer}
+.ranking-ticker-label{display:flex;flex-direction:column;justify-content:center;gap:2px;padding:0 18px;border-right:1px solid var(--line)!important;text-align:left}
+.ranking-ticker-label span{color:#d49a73;font-size:10px;font-weight:850;letter-spacing:.14em}
+.ranking-ticker-label small{color:var(--muted2);font-size:8px}
+.ranking-ticker-track{display:flex;min-width:0;overflow-x:auto;scrollbar-width:none}
+.ranking-ticker-track::-webkit-scrollbar{display:none}
+.ranking-ticker-track>button{display:grid;flex:1 0 142px;grid-template-columns:22px 24px minmax(0,1fr);grid-template-rows:1fr 1fr;align-items:end;gap:0 5px;min-width:0;padding:7px 12px;border-right:1px solid var(--line);text-align:left}
+.ranking-ticker-track>button:hover{background:rgba(255,255,255,.035)}
+.ranking-ticker-track b{grid-row:1/3;align-self:center;color:#c8875d;font:700 10px ui-monospace,monospace}
+.ranking-ticker-track span{grid-row:1/3;align-self:center;font-size:16px}
+.ranking-ticker-track strong{overflow:hidden;align-self:end;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.ranking-ticker-track em{align-self:start;color:var(--muted2);font-size:8px;font-style:normal}
+.ranking-ticker-more{border-left:1px solid var(--line)!important;color:#cf9169!important;font-size:18px}
+.ranking-ticker-more:hover{background:rgba(200,135,93,.1)}
+
+.map-room-strategy .game-layout{grid-template-columns:minmax(0,1fr) minmax(400px,470px);gap:14px;padding:14px 18px}
+.map-room-strategy .map-heading,.map-room-strategy .control-heading{padding:10px 12px;border-radius:8px}
+.map-room-strategy .history-panel.world-panel{padding:10px;border-radius:8px}
+.map-room-strategy .app-footer{padding-top:2px}
+
+@media(max-width:1180px) and (min-width:901px){
+  .map-room-classic .map-heading{width:min(530px,calc(100% - 390px))}
+  .map-room-classic .control-heading,.map-room-classic .history-panel.world-panel{right:12px;width:315px}
+  .map-room-classic .history-panel.world-panel{max-height:330px}
+  .map-room-classic .primary-controls{width:calc(100% - 36px);grid-template-columns:minmax(210px,1.1fr) 130px minmax(190px,.9fr) 130px}
+  .map-room-classic .wheel-grid{width:min(720px,calc(100% - 40px))}
+  .map-room-classic .event-ribbon{width:min(560px,calc(100% - 350px))}
+}
+
+@media(max-width:900px){
+  .map-room{overflow-x:hidden}
+  .map-room .topbar{min-height:62px;padding:0 14px}
+  .map-room .world-status{display:none}
+  .map-room-classic .game-layout,.map-room-strategy .game-layout{display:grid;height:auto;grid-template-columns:1fr;gap:10px;padding:12px}
+  .map-room-classic .map-column,.map-room-classic .map-frame,.map-room-classic .map-heading,.map-room-classic .map-footer,.map-room-classic .controls,.map-room-classic .control-heading,.map-room-classic .wheel-grid,.map-room-classic .primary-controls,.map-room-classic .history-panel.world-panel{position:relative;inset:auto;top:auto;right:auto;bottom:auto;left:auto;width:auto;max-height:none;transform:none}
+  .map-room-classic .map-column{display:flex;flex-direction:column}
+  .map-room-classic .map-heading{order:0;margin-bottom:8px;padding:10px 12px}
+  .map-room-classic .map-heading h1{max-width:calc(100vw - 64px);font-size:18px}
+  .map-room-classic .map-frame{order:1;height:auto;min-height:310px;aspect-ratio:1.72/1;border-width:1px;border-radius:8px}
+  .map-room-classic .map-footer{order:2;display:flex;padding:8px 0 0}
+  .map-room-classic .phase-line{width:auto;max-width:100%;background:transparent;box-shadow:none}
+  .map-room-classic .controls{display:flex;gap:8px;pointer-events:auto}
+  .map-room-classic .control-heading{order:0;margin:0;padding:10px 12px}
+  .map-room-classic .wheel-grid{order:1;grid-template-columns:repeat(2,minmax(0,1fr));padding:6px}
+  .map-room-classic .primary-controls{order:2;display:grid;grid-template-columns:1fr 1fr;padding:7px}
+  .map-room-classic .turn-button{grid-column:1/-1}
+  .map-room-classic .major-toggle{border-left:0}
+  .map-room-classic .history-panel.world-panel{order:3;min-height:230px;padding:10px}
+  .map-room-classic .history-panel .history-list,.map-room-classic .history-panel .ranking-list{max-height:55dvh}
+  .map-room-classic .player-alarm,.map-room-classic .partial-warning{position:static;width:auto;transform:none}
+  .map-room-classic .zoom-controls{top:8px;right:8px;left:auto;grid-template-columns:repeat(4,34px) 48px}
+  .map-room-classic .zoom-controls button{width:34px;height:34px}
+  .map-room-classic .zoom-controls>span{grid-column:auto;width:auto;padding:0}
+  .map-room-classic .zoom-hint{top:8px;right:auto;left:8px;width:auto;max-width:90px;writing-mode:initial}
+  .map-room-classic .event-ribbon{right:8px;bottom:8px;left:8px;width:auto;transform:none}
+  .map-room-classic .country-dossier{top:auto;right:8px;bottom:8px;left:8px}
+  .map-room .app-footer{display:flex}
+  .ranking-ticker{grid-template-columns:92px minmax(0,1fr) 38px;min-height:62px}
+  .ranking-ticker-label{padding:0 12px}
+  .ranking-ticker-track>button{flex-basis:150px}
+}
+
+@media(max-width:560px){
+  .map-room .brand strong{font-size:13px;letter-spacing:.12em}
+  .map-room-classic .game-layout,.map-room-strategy .game-layout{padding:9px}
+  .map-room-classic .map-frame{min-height:270px;aspect-ratio:1.35/1}
+  .map-room-classic .map-heading{align-items:flex-start}
+  .map-room-classic .seed-inline,.map-room-classic .land-ratio{display:none}
+  .map-room-classic .primary-controls{grid-template-columns:1fr}
+  .map-room-classic .turn-button,.map-room-classic .secondary-controls,.map-room-classic .auto-controls,.map-room-classic .major-toggle{grid-column:1}
+  .map-room-classic .major-toggle{padding:5px 3px}
+  .ranking-ticker{grid-template-columns:72px minmax(0,1fr) 34px}
+  .ranking-ticker-label{padding:0 8px}
+  .ranking-ticker-label small{display:none}
+  .ranking-ticker-track>button{flex-basis:142px;padding-right:8px;padding-left:8px}
+  .map-room .app-footer{padding:10px 12px 18px}
+}
+
+@media(max-width:420px){
+  .map-room-classic .wheel-grid{grid-template-columns:1fr}
+}

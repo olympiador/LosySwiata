@@ -2806,3 +2806,14 @@ test("War only country search and the mobile ranking layout stay wired into the 
   assert.ok(css.includes(".ranking-head.sortable{display:none}"));
   assert.ok(css.includes(".ranking-list:not(.with-strength) .ranking-main{grid-template-columns:28px minmax(0,1fr) auto"));
 });
+
+test("the Map Room layout keeps the map, command dock and ranking ticker wired together", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.ok(page.includes("map-room-classic"));
+  assert.ok(page.includes('className="ranking-ticker"'));
+  assert.ok(page.includes("sortedRanking.filter((entry) => entry.active).slice(0, 8)"));
+  assert.ok(css.includes(".map-room-classic .wheel-grid{position:absolute"));
+  assert.ok(css.includes(".ranking-ticker-track{display:flex"));
+  assert.ok(css.includes("@media(max-width:900px)"));
+});

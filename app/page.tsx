@@ -1559,9 +1559,9 @@ export default function Home() {
   const capitalRelocationOptions: StrategicCapitalRelocationOption[] = useMemo(() => engine && playerCountryId !== null ? engine.getCapitalRelocationOptions(playerCountryId) : [], [dataVersion, engine, playerCountryId]);
 
   return (
-    <main className="app-shell" id="top">
+    <main className={`app-shell map-room ${gameMode === "strategy" ? "map-room-strategy" : "map-room-classic"}`} id="top">
       <header className="topbar">
-        <a className="brand" href="#top"><span className="brand-mark"><i /><i /></span><span><strong>LOSY ŚWIATA</strong><small>symulator zmiennych granic</small></span></a>
+        <a className="brand" href="#top"><span className="brand-mark"><i /><i /></span><span><strong>LOSY ŚWIATA</strong><small>atlas przemian</small></span></a>
         <div className="world-status"><span><b>{turn}</b> tura</span><span><b>{activeCountries}</b> państw</span>{gameMode && <span><b>{gameMode === "war" ? "WAR ONLY" : gameMode === "strategy" ? "STRATEGICZNY" : "PEŁNY"}</b> tryb</span>}{cataclysmIn !== null && <span title="Kataklizm zalewa niziny całego świata co 40 tur">🌊 kataklizm za <b>{cataclysmIn} tur</b></span>}{warGuarantee && <span title="Gwarancja obronna: ten kraj traci o połowę mniej">🛡 <b>{engine?.getCountry(warGuarantee.countryId)?.name ?? "—"}</b> · {warGuarantee.turnsLeft} tur</span>}<span className={`status ${busy ? "rolling" : "ready"}`}><i />{autoRunning ? `AUTO${typeof autoRemaining === "number" ? ` · ${autoRemaining}` : ""}` : busy ? "TRWA RUNDA" : gameMode === "strategy" ? "DOWÓDZTWO" : `KROK ${stageOrder.indexOf(stage) + 1}/5`}</span></div>
         <div className="top-actions">
           <button className="text-button" onClick={() => setRules(true)}>Zasady</button>
@@ -1797,6 +1797,16 @@ export default function Home() {
           </div>
         </aside>
       </section>
+
+      {gameMode && <section className="ranking-ticker" aria-label="Czołówka rankingu państw">
+        <button className="ranking-ticker-label" onClick={() => setSidePanel("ranking")}><span>RANKING</span><small>pełna tabela</small></button>
+        <div className="ranking-ticker-track">
+          {sortedRanking.filter((entry) => entry.active).slice(0, 8).map((entry) => <button key={entry.countryId} onClick={() => { setSelectedId(entry.countryId); focusCountry(entry.countryId); }}>
+            <b>{entry.rank}</b><span>{entry.flag}</span><strong>{entry.name}</strong><em>{gameMode === "strategy" ? `${entry.strength?.rating ?? 0}/100` : formatArea(entry.areaKm2)}</em>
+          </button>)}
+        </div>
+        <button className="ranking-ticker-more" onClick={() => setSidePanel("ranking")} aria-label="Otwórz pełny ranking">↗</button>
+      </section>}
 
       <footer className="app-footer"><span>Mapa zapisuje się automatycznie na tym urządzeniu</span><span className="terrain-credit">Prowincje: Natural Earth Admin‑1 · Wysokości: ETOPO1/GMTED2010</span><button className="seed-copy" disabled={!engine} onClick={() => engine && void copyText(String(engine.seed), "Seed skopiowany")}>Seed świata: <b>{engine?.seed ?? "—"}</b> ⧉</button></footer>
 
