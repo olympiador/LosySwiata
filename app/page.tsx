@@ -826,17 +826,40 @@ export default function Home() {
 
       if (stage === "action") {
         if (draft.countryId === undefined) { activeTurnRef.current = null; setActiveTurnId(null); setStage("country"); paint(); return; }
+        const legalActions = engine.possibleActions(draft.countryId);
+        if (legalActions.length === 0) {
+          const actor = engine.getCountry(draft.countryId);
+          setPhase(`${actor?.name ?? "Ten kraj"} nie ma żadnej możliwej akcji.`);
+          setDraft({});
+          setStage("country");
+          activeTurnRef.current = null;
+          setActiveTurnId(null);
+          paint();
+          return;
+        }
         const result = engine.rollAction(draft.countryId);
-        const action = ACTIONS.find((item) => item.key === result.action);
-        const availableActions = gameMode === "war" ? ACTIONS.filter((item) => item.key === "war") : ACTIONS;
+        if (!result.action) {
+          const actor = engine.getCountry(draft.countryId);
+          setPhase(`${actor?.name ?? "Ten kraj"} nie ma żadnej możliwej akcji.`);
+          setDraft({});
+          setStage("country");
+          activeTurnRef.current = null;
+          setActiveTurnId(null);
+          paint();
+          return;
+        }
+        const chosenAction: ActionKey = result.action;
+        const action = ACTIONS.find((item) => item.key === chosenAction);
+        const legalActionKeys = new Set(legalActions);
+        const availableActions = ACTIONS.filter((item) => legalActionKeys.has(item.key));
         setPhase("Losuję akcję…");
-        await spin("action", availableActions.map((item) => `${item.icon} ${item.label}`), `${actionIcons[result.action]} ${action?.label ?? "Akcja"}`, 520);
+        await spin("action", availableActions.map((item) => `${item.icon} ${item.label}`), `${actionIcons[chosenAction]} ${action?.label ?? "Akcja"}`, 520);
         if (!result.possible) {
           setPhase(`${action?.label ?? "Ta akcja"} nie ma możliwego kierunku. Kliknij „Losuj akcję” ponownie.`);
           return;
         }
-        setDraft((current) => ({ ...current, action: result.action, direction: undefined, size: undefined, fraction: undefined, targetId: undefined }));
-        if (result.action !== "war") setBattleFx(null);
+        setDraft((current) => ({ ...current, action: chosenAction, direction: undefined, size: undefined, fraction: undefined, targetId: undefined }));
+        if (chosenAction !== "war") setBattleFx(null);
         setWheels((current) => ({ ...current, direction: "—", size: "—" }));
         setStage("direction");
         setPhase(`Wylosowano: ${action?.label}. Kliknij „Losuj kierunek”.`);
@@ -1718,6 +1741,11 @@ export default function Home() {
             {engine && gameMode !== "strategy" && mapStyle !== "flags" && mapStyle !== "hybrid" && <svg ref={vectorMapRef} className="vector-country-layer" viewBox={vectorMapViewBox} preserveAspectRatio="none" aria-hidden="true">
               <defs>
                 <linearGradient id="vector-map-ocean" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stopColor="#0b2936" />
+                  <stop offset=".52" stopColor="#09222e" />
+                  <stop offset="1" stopColor="#071923" />
+                </linearGradient>
+                <linearGradient id="vector-map-ocean-change" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2={MAP_H}>
                   <stop offset="0" stopColor="#0b2936" />
                   <stop offset=".52" stopColor="#09222e" />
                   <stop offset="1" stopColor="#071923" />

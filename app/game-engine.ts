@@ -1172,20 +1172,32 @@ export class WorldEngine {
     return initial > 0 ? current / initial : 1;
   }
 
-  private pickAction(stats: Stats[]) {
-    const actions = this.availableActions();
-    if (this.gameMode === "war") return actions[0].key;
+  possibleActions(countryId: number, stats = this.stats()): ActionKey[] {
+    const available = this.availableActions();
+    const validActions: ActionKey[] = [];
+    for (const { key } of available) {
+      if (DIRECTIONS.some((direction) => this.valid(countryId, key, direction, stats))) {
+        validActions.push(key);
+      }
+    }
+    return validActions;
+  }
+
+  private pickAction(stats: Stats[], countryId?: number): ActionKey | null {
+    const available = countryId !== undefined ? this.possibleActions(countryId, stats) : this.availableActions().map(({ key }) => key);
+    if (!available.length) return null;
+    if (this.gameMode === "war" || this.gameMode === "strategy" || available.length === 1) return available[0];
     // Equal counts of +f and -f still shrink the world because (1+f)(1-f)<1.
     // The size roll below corrects that asymmetry; this gentle feedback also
     // compensates for partially failed land growth near crowded coastlines.
     const correction = Math.max(-.72, Math.min(.72, (1 - this.ecologicalLandRatio(stats)) * 2.4));
-    const weights = actions.map(({ key }) => key === "land" ? 1 + correction : key === "erosion" ? 1 - correction : 1);
+    const weights = available.map((key) => key === "land" ? 1 + correction : key === "erosion" ? 1 - correction : 1);
     let roll = this.random() * weights.reduce((sum, weight) => sum + weight, 0);
-    for (let index = 0; index < actions.length; index++) {
+    for (let index = 0; index < available.length; index++) {
       roll -= weights[index];
-      if (roll <= 0) return actions[index].key;
+      if (roll <= 0) return available[index];
     }
-    return actions.at(-1)!.key;
+    return available.at(-1)!;
   }
 
   setGameMode(mode: GameMode) {
@@ -1945,7 +1957,7 @@ export class WorldEngine {
   getMapRevision() { return this.visualRevision; }
 
   private vectorFill(countryId: number) {
-    if (countryId < 0) return "#09222e";
+    if (countryId < 0) return "url(#vector-map-ocean-change)";
     const [r, g, b] = this.countries[countryId]?.color ?? [80, 96, 92];
     const luminance = r * .2126 + g * .7152 + b * .0722;
     const channel = (value: number) => Math.round(Math.max(0, Math.min(255,
@@ -3632,10 +3644,60 @@ export class WorldEngine {
     return relocated;
   }
 
-  private coast(actorId: number, direction: Direction, stats: Stats[]) {
+  private openSeaCache = new Map<number, boolean>();
+  private openSeaRevision = -1;
+
+  private isOpenSea(waterIndex: number): boolean {
+    if (this.owners[waterIndex] !== -1) return false;
+    if (this.openSeaRevision !== this.visualRevision) {
+      this.openSeaRevision = this.visualRevision;
+      this.openSeaCache.clear();
+    }
+    const cached = this.openSeaCache.get(waterIndex);
+    if (cached !== undefined) return cached;
+
+    const OPEN_SEA_THRESHOLD = 7000;
+    const visited: number[] = [waterIndex];
+    const visitedSet = new Set<number>([waterIndex]);
+    let isOpen = false;
+
+    for (let head = 0; head < visited.length; head++) {
+      const current = visited[head];
+      const y = Math.floor(current / MAP_W);
+      if (y === 0 || y === MAP_H - 1 || visited.length >= OPEN_SEA_THRESHOLD) {
+        isOpen = true;
+        break;
+      }
+      const x = current % MAP_W;
+      const neighbors = [
+        y * MAP_W + wrapX(x - 1),
+        y * MAP_W + wrapX(x + 1),
+        y > 0 ? (y - 1) * MAP_W + x : -1,
+        y < MAP_H - 1 ? (y + 1) * MAP_W + x : -1,
+      ];
+      for (const n of neighbors) {
+        if (n >= 0 && this.owners[n] === -1 && !visitedSet.has(n)) {
+          visitedSet.add(n);
+          visited.push(n);
+          if (visited.length >= OPEN_SEA_THRESHOLD) {
+            isOpen = true;
+            break;
+          }
+        }
+      }
+      if (isOpen) break;
+    }
+
+    for (const cell of visited) {
+      this.openSeaCache.set(cell, isOpen);
+    }
+    return isOpen;
+  }
+
+  private coast(actorId: number, direction: Direction, stats: Stats[], requireOpenSea = true) {
     const result: Array<{ own: number; sea: number; score: number }> = [];
-    if (this.countries[actorId]?.landlocked) return result;
     const sx = Math.sign(direction.dx), sy = Math.sign(direction.dy), origin = stats[actorId];
+    if (!origin) return result;
     const stableCoast = this.landAnchorCells(actorId);
     const shoreline = new Set<number>();
     for (const i of this.boundaryCells()[actorId] ?? []) {
@@ -3643,7 +3705,9 @@ export class WorldEngine {
       const x = i % MAP_W, y = Math.floor(i / MAP_W);
       if ([[-1, 0], [1, 0], [0, -1], [0, 1]].some(([ox, oy]) => {
         const ny = y + oy;
-        return ny >= 0 && ny < MAP_H && this.owners[ny * MAP_W + wrapX(x + ox)] === -1;
+        if (ny < 0 || ny >= MAP_H) return false;
+        const target = ny * MAP_W + wrapX(x + ox);
+        return this.owners[target] === -1 && (!requireOpenSea || this.isOpenSea(target));
       })) shoreline.add(i);
     }
     // Diagonal sampling must not let a landlocked state jump over a foreign
@@ -3653,6 +3717,7 @@ export class WorldEngine {
       if (ny < 0 || ny >= MAP_H) continue;
       const next = ny * MAP_W + wrapX(x + sx);
       if (this.owners[next] !== -1) continue;
+      if (requireOpenSea && !this.isOpenSea(next)) continue;
       result.push({ own: i, sea: next, score: deltaX(x, origin.cx) * direction.dx + (y - origin.cy) * direction.dy });
     }
     if (!result.length) return result;
@@ -3720,7 +3785,7 @@ export class WorldEngine {
 
   private valid(actorId: number, action: ActionKey, direction: Direction, stats: Stats[]) {
     if (action === "war") return this.targetInDirection(actorId, direction, stats) !== null;
-    if (action === "land") return this.coast(actorId, direction, stats).length > 0;
+    if (action === "land") return this.coast(actorId, direction, stats, true).length > 0;
     return stats[actorId].cells > 3 && this.borderSeeds(actorId, direction.dx, direction.dy, stats).length > 0;
   }
 
@@ -3738,7 +3803,13 @@ export class WorldEngine {
     const active = this.countries.filter(({ id }) => stats[id].cells > 0 && this.canCountryAct(id));
     if (!active.length) return null;
     const start = Math.floor(this.random() * active.length) % active.length;
-    if (this.gameMode === "full") return active[start];
+    if (this.gameMode === "full") {
+      for (let offset = 0; offset < active.length; offset++) {
+        const actor = active[(start + offset) % active.length];
+        if (this.possibleActions(actor.id, stats).length > 0) return actor;
+      }
+      return null;
+    }
     if (this.gameMode === "war") {
       const eligible = active.filter(({ id }) => this.capitalStates[id]?.lostTurn === null || this.capitalStates[id] === null);
       const eligibleIds = new Set(eligible.map(({ id }) => id));
@@ -3762,7 +3833,7 @@ export class WorldEngine {
     }
     for (let offset = 0; offset < active.length; offset++) {
       const actor = active[(start + offset) % active.length];
-      if (DIRECTIONS.some((direction) => this.valid(actor.id, "war", direction, stats))) return actor;
+      if (this.possibleActions(actor.id, stats).length > 0) return actor;
     }
     return null;
   }
@@ -3775,9 +3846,10 @@ export class WorldEngine {
     return actor ? { rngBefore, countryId: actor.id } : null;
   }
 
-  rollAction(countryId: number) {
+  rollAction(countryId: number): { action: ActionKey | null; possible: boolean } {
     const stats = this.stats();
-    const action = this.pickAction(stats);
+    const action = this.pickAction(stats, countryId);
+    if (!action) return { action: null, possible: false };
     return { action, possible: DIRECTIONS.some((direction) => this.valid(countryId, action, direction, stats)) };
   }
 
@@ -3820,7 +3892,10 @@ export class WorldEngine {
     const actor = this.pickActor(stats);
     if (!actor) return null;
     const actions = this.availableActions();
-    let action = this.pickAction(stats), direction = this.gameMode === "war" ? DIRECTIONS[0] : this.pick(DIRECTIONS), found = false, actionWasRerolled = false;
+    const initialAction = this.pickAction(stats, actor.id);
+    if (!initialAction) return null;
+    let action: ActionKey = initialAction;
+    let direction = this.gameMode === "war" ? DIRECTIONS[0] : this.pick(DIRECTIONS), found = false, actionWasRerolled = false;
     const directionAttempts: Direction[] = [];
     if (this.gameMode === "war" && action === "war") {
       const preferred = this.preferredWarDirection(actor.id, stats);
@@ -3835,7 +3910,11 @@ export class WorldEngine {
         if (this.valid(actor.id, action, direction, stats)) { found = true; break; }
         if (tried.size === DIRECTIONS.length) break;
       }
-      if (!found) { action = this.pickAction(stats); actionWasRerolled = true; }
+      if (!found) {
+        const rerolled = this.pickAction(stats, actor.id);
+        if (rerolled) action = rerolled;
+        actionWasRerolled = true;
+      }
     }
     if (!found) {
       // Random retries used to have a real chance of missing erosion seven
@@ -4305,13 +4384,19 @@ export class WorldEngine {
     while (accumulated < goal && remainingCells > 3) {
       const remaining = candidates.filter((item) => this.owners[item.index] === actorId);
       if (!remaining.length) break;
+      let remMaxOutward = -Infinity, remMinOutward = Infinity;
+      for (const item of remaining) {
+        if (item.outward > remMaxOutward) remMaxOutward = item.outward;
+        if (item.outward < remMinOutward) remMinOutward = item.outward;
+      }
+      const sectorEdge = remMaxOutward - Math.max(2, (remMaxOutward - remMinOutward) * 0.25);
       const directional = remaining.filter((item) => item.outward >= sectorEdge);
       const directionalPool = directional.length ? directional : remaining;
       const coastal = directionalPool.filter((item) => item.coastal);
       const seedPool = coastal.length ? coastal : directionalPool;
       let seed = seedPool[0].index, best = Infinity;
       for (const candidate of seedPool) {
-        const score = localHeight(candidate.index) + (maximumOutward - candidate.outward) * 4;
+        const score = localHeight(candidate.index) + (remMaxOutward - candidate.outward) * 160;
         if (score < best) { best = score; seed = candidate.index; }
       }
 
@@ -4329,9 +4414,7 @@ export class WorldEngine {
           + Math.sin(angle * 3 + phase) * 0.08
           + Math.sin(angle * 6 - phase * 0.61) * 0.04;
         const regionalNoise = smoothNoiseAt(x, y, 17) * erosionRadius * 0.11;
-        // Direction selects the basin and remains only a gentle preference.
-        // Terrain and organic local variation shape the flooded shoreline.
-        return spill + distance * contour * 0.16 + Math.max(0, -outward) * 0.28
+        return spill + distance * contour * 0.16 + Math.max(0, -outward) * 0.65
           + regionalNoise + depth * 0.015 + noiseAt(x, y) * 0.45;
       };
       heapPush(frontier, { index: seed, spill: this.elevation[seed], depth: 0, priority: this.elevation[seed] });
@@ -4357,6 +4440,80 @@ export class WorldEngine {
         }
       }
       if (!componentChanged) break;
+    }
+    this.cleanupErosionRemnants(actorId, changed, remainingCells);
+  }
+
+  private cleanupErosionRemnants(actorId: number, changed: Array<[number, number]>, initialRemainingCells: number) {
+    if (!changed.length) return;
+    const cardinalSteps = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    const steps8 = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
+    const candidateStarts = new Set<number>();
+    for (const [index, prevOwner] of changed) {
+      if (prevOwner !== actorId) continue;
+      const x = index % MAP_W, y = Math.floor(index / MAP_W);
+      for (const [ox, oy] of steps8) {
+        const ny = y + oy;
+        if (ny < 0 || ny >= MAP_H) continue;
+        const next = ny * MAP_W + wrapX(x + ox);
+        if (this.owners[next] === actorId) candidateStarts.add(next);
+      }
+    }
+    if (!candidateStarts.size) return;
+
+    let remainingCells = initialRemainingCells;
+    const largeSeen = new Set<number>();
+    const smallComponents: number[][] = [];
+    let hasLarge = false;
+    let unvisitedCandidates = candidateStarts.size;
+
+    for (const start of candidateStarts) {
+      if (this.owners[start] !== actorId || largeSeen.has(start)) continue;
+      const component = [start];
+      const seen = new Set<number>([start]);
+      if (candidateStarts.has(start)) unvisitedCandidates--;
+      let head = 0;
+      let isLarge = false;
+
+      while (head < component.length) {
+        const cur = component[head++];
+        const cx = cur % MAP_W, cy = Math.floor(cur / MAP_W);
+        for (const [ox, oy] of cardinalSteps) {
+          const ny = cy + oy;
+          if (ny < 0 || ny >= MAP_H) continue;
+          const next = ny * MAP_W + wrapX(cx + ox);
+          if (this.owners[next] === actorId && !seen.has(next)) {
+            seen.add(next);
+            component.push(next);
+            if (candidateStarts.has(next)) unvisitedCandidates--;
+            if (component.length > 8) isLarge = true;
+          }
+        }
+        if (isLarge && (unvisitedCandidates <= 0 || component.length >= 4000)) break;
+      }
+
+      if (isLarge) {
+        hasLarge = true;
+        for (const idx of seen) largeSeen.add(idx);
+      } else {
+        smallComponents.push(component);
+      }
+    }
+
+    const maxSmallSize = smallComponents.reduce((max, c) => Math.max(max, c.length), 0);
+
+    for (const component of smallComponents) {
+      const isDeadRemnant = component.length <= 2;
+      const isDetachedCutoff = hasLarge || component.length < maxSmallSize;
+      if (isDeadRemnant || isDetachedCutoff) {
+        for (const idx of component) {
+          if (this.owners[idx] === actorId) {
+            this.owners[idx] = -1;
+            changed.push([idx, actorId]);
+            remainingCells--;
+          }
+        }
+      }
     }
   }
 
@@ -4407,31 +4564,38 @@ export class WorldEngine {
       const seedRowWeight = Math.max(.12, this.rowWeight[seedY]);
       const maximumReach = Math.max(12, Math.sqrt(goal / seedRowWeight) * 2.35 + 5);
       const maximumReachSquared = maximumReach * maximumReach;
+
+      const clusterSeeds = availableSeeds.filter((idx) => {
+        const sx = idx % MAP_W, sy = Math.floor(idx / MAP_W);
+        return Math.hypot(deltaX(sx, seedX), sy - seedY) <= maximumReach * 0.75;
+      });
+
       const frontier: Array<{ index: number; priority: number }> = [];
       const phase = (noiseSeed % 6_283) / 1_000;
       const phaseShape = Math.sin(phase) * .025;
-      const priorityAt = (index: number, distance: number) => {
+      const priorityAt = (index: number, originDist: number) => {
         const x = index % MAP_W, y = Math.floor(index / MAP_W);
         const dx = deltaX(x, seedX), dy = y - seedY;
         const outward = dx * direction.dx + dy * direction.dy;
         const lateral = Math.abs(dx * -direction.dy + dy * direction.dx);
-        // One coherent noise sample gives the island an irregular outline
-        // without running four trigonometric functions for every candidate.
-        // On LARGE actions this function is evaluated hundreds of thousands
-        // of times, so the old angular harmonics dominated the whole turn.
         const shapeNoise = smoothNoiseAt(x, y, 43);
         const contour = 1 + shapeNoise * .11 + phaseShape;
         const regionalNoise = shapeNoise * radius * 0.055;
-        // Terrain chooses among nearby cells, but cannot outweigh hundreds of
-        // kilometres of distance. The old unbounded elevation bonus made a
-        // thin causeway race across open sea toward a distant shallow shelf.
-        const terrainBonus = Math.max(-14, Math.min(14, (seabedAt(index) - seedSeabed) / 180));
+        const depthFactor = Math.max(-28, Math.min(28, (seabedAt(index) - seedSeabed) / 110));
         const drowned = this.initialOwners[index] >= 0 && this.owners[index] < 0 ? DROWNED_LAND_BONUS : 0;
-        return -terrainBonus - drowned + distance * contour - outward * 0.08
-          + lateral * 0.025 + regionalNoise + noiseAt(x, y) * 1.5;
+        return originDist * contour - depthFactor - drowned - outward * 0.22
+          + lateral * 0.06 + regionalNoise + noiseAt(x, y) * 1.5;
       };
-      heapPush(frontier, { index: first, priority: 0 });
-      queued[first] = 1;
+
+      for (const s of clusterSeeds) {
+        queued[s] = 1;
+        const seabedDiff = (seabedAt(s) - seedSeabed) / 120;
+        heapPush(frontier, { index: s, priority: -seabedDiff });
+      }
+
+      const distFromOrigin = new Map<number, number>();
+      for (const s of clusterSeeds) distFromOrigin.set(s, 0);
+
       while (frontier.length && accumulated < goal) {
         const index = heapPop(frontier).index;
         if (this.owners[index] !== allowed) continue;
@@ -4439,6 +4603,7 @@ export class WorldEngine {
         changed.push([index, allowed]);
         this.owners[index] = replacement;
         accumulated += this.rowWeight[y];
+        const curDist = distFromOrigin.get(index) ?? 0;
         for (const [ox, oy] of steps) {
           const ny = y + oy;
           if (ny < 0 || ny >= MAP_H) continue;
@@ -4447,8 +4612,11 @@ export class WorldEngine {
           const dx = deltaX(nx, seedX), dy = ny - seedY;
           const distanceSquared = dx * dx + dy * dy;
           if (distanceSquared > maximumReachSquared) continue;
+          const stepDist = (ox === 0 || oy === 0) ? 1 : 1.414;
+          const nextDist = curDist + stepDist;
+          distFromOrigin.set(next, nextDist);
           queued[next] = 1;
-          heapPush(frontier, { index: next, priority: priorityAt(next, Math.sqrt(distanceSquared)) });
+          heapPush(frontier, { index: next, priority: priorityAt(next, nextDist) });
         }
       }
     }
@@ -4576,7 +4744,9 @@ export class WorldEngine {
       // A land roll that closes the last strait between two states is an event
       // of its own: compare the political neighbourhood before and after.
       const neighboursBefore = new Set(this.neighbouringCountries(actor.id));
-      this.grow(this.coast(actor.id, plan.direction, before).map((item) => item.sea), -1, actor.id, goal, plan.direction, changed);
+      const openCoast = this.coast(actor.id, plan.direction, before, true).map((item) => item.sea);
+      const starts = openCoast.length ? openCoast : this.coast(actor.id, plan.direction, before, false).map((item) => item.sea);
+      this.grow(starts, -1, actor.id, goal, plan.direction, changed);
       landNeighbours = this.neighbouringCountries(actor.id, changed);
       for (const id of landNeighbours) {
         if (neighboursBefore.has(id)) continue;

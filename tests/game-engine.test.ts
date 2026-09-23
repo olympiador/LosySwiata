@@ -13,6 +13,7 @@ import { AGE_GROUPS, advancePopulationQuarter, ageCounts, allocatePeople, census
 import type { StrategicCampaign, StrategicWarHistoryEntry } from "../app/game-engine";
 import { decodePopulationGrid, loadPopulationGrid, POPULATION_GRID_URL } from "../app/population-grid";
 import { STRATEGIC_CASUS_BELLI, deriveStrategicResourceSecurity, strategicObjectives } from "../app/strategic-systems";
+import { ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH, ELEVATION_HEIGHT } from "../app/elevation-data";
 
 Object.defineProperty(globalThis, "document", {
   configurable: true,
@@ -906,7 +907,34 @@ test("an inland lake does not let a landlocked country create new land", () => {
   const engine = engineFrom(owners, undefined, [{ ...countries[0], iso: "MK", name: "Macedonia Północna", landlocked: true }, countries[1]]);
   (engine as unknown as { random: () => number }).random = () => 0.4;
 
-  assert.deepEqual(engine.rollAction(0), { action: "land", possible: false });
+  assert.equal(engine.possibleActions(0).includes("land"), false);
+  assert.notEqual(engine.rollAction(0).action, "land");
+});
+
+test("a landlocked country cannot roll new land until it conquers a coastline", () => {
+  const sampleCountries: Country[] = [
+    { ...countries[0], id: 0, iso: "CH", name: "Szwajcaria", landlocked: true },
+    { ...countries[1], id: 1, iso: "IT", name: "Włochy", landlocked: false },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let y = 5; y < 35; y++) for (let x = 5; x < 35; x++) owners[indexAt(x, y)] = 1;
+  for (let y = 15; y < 25; y++) for (let x = 15; x < 25; x++) owners[indexAt(x, y)] = 0;
+  const engine = engineFrom(owners, undefined, sampleCountries);
+
+  assert.equal(engine.possibleActions(0).includes("land"), false);
+  for (let i = 0; i < 10; i++) {
+    assert.notEqual(engine.rollAction(0).action, "land");
+  }
+
+  // Conquering Italian coastal territory to the open sea
+  for (let x = 25; x < 35; x++) owners[indexAt(x, 20)] = 0;
+  (engine as unknown as { visualRevision: number }).visualRevision++;
+
+  assert.equal(engine.possibleActions(0).includes("land"), true);
+  const action = engine.rollAction(0);
+  assert.ok(action.action !== null && ["war", "land", "erosion"].includes(action.action));
+  assert.equal(action.possible, true);
 });
 
 test("war capture starts on a shared border instead of a distant island", () => {
@@ -1625,6 +1653,137 @@ test("landlocked erosion forms an organic shoreline instead of a near-vertical c
   assert.ok(reversals >= 8, "the flooded edge should meander instead of following one straight trend");
 });
 
+test("directional erosion removes land from the outer edge in Moldova", () => {
+  const inflatedAdmin = inflateSync(Buffer.from(ADMIN1_DEFLATE_BASE64, "base64"));
+  const admin1At = new Int16Array(inflatedAdmin.buffer, inflatedAdmin.byteOffset, inflatedAdmin.byteLength / 2);
+  const moldovaCountries: Country[] = [
+    { ...countries[0], id: 0, iso: "MD", name: "Mołdawia", landlocked: true },
+    { ...countries[1], id: 1, iso: "RO", name: "Sąsiad", landlocked: false },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let i = 0; i < admin1At.length; i++) {
+    if (admin1At[i] >= 0) {
+      owners[i] = ADMIN1_ISO[admin1At[i]] === "MD" ? 0 : 1;
+    }
+  }
+  const engine = engineFrom(owners, undefined, moldovaCountries, admin1At);
+  const north = DIRECTIONS.find((d) => d.short === "N")!;
+  const result = engine.apply({
+    rngBefore: 1577112565,
+    countryId: 0,
+    action: "erosion",
+    direction: north,
+    directionAttempts: [north],
+    actionWasRerolled: false,
+    size: "large",
+    fraction: 0.75,
+    targetId: null,
+  });
+
+  assert.ok(result.changedIndices.length > 0);
+  const erodedRows = result.changedIndices.map((idx) => Math.floor(idx / MAP_W));
+  const minY = Math.min(...erodedRows);
+  const maxY = Math.max(...erodedRows);
+  assert.equal(minY, 498, "north erosion must begin at the extreme northern border of Moldova");
+  assert.ok(result.changedIndices.some((idx) => Math.floor(idx / MAP_W) === 499));
+  assert.ok(result.changedIndices.some((idx) => Math.floor(idx / MAP_W) === 500));
+  assert.ok(maxY < 528, "north erosion must leave the southern territory of Moldova intact");
+});
+
+test("post-erosion appearance matches ocean gradient and cleans up small island remnants in Iceland", () => {
+  const inflatedAdmin = inflateSync(Buffer.from(ADMIN1_DEFLATE_BASE64, "base64"));
+  const admin1At = new Int16Array(inflatedAdmin.buffer, inflatedAdmin.byteOffset, inflatedAdmin.byteLength / 2);
+  const source = inflateSync(Buffer.from(ELEVATION_RANKS_DEFLATE_BASE64, "base64"));
+  const elevation = new Uint16Array(MAP_W * MAP_H);
+  for (let y = 0; y < MAP_H; y++) {
+    const sourceY = (y + 0.5) * ELEVATION_HEIGHT / MAP_H - 0.5;
+    const y0 = Math.max(0, Math.floor(sourceY)), y1 = Math.min(ELEVATION_HEIGHT - 1, y0 + 1), fy = sourceY - y0;
+    for (let x = 0; x < MAP_W; x++) {
+      const sourceX = (x + 0.5) * ELEVATION_WIDTH / MAP_W - 0.5;
+      const floorX = Math.floor(sourceX), x0 = (floorX + ELEVATION_WIDTH) % ELEVATION_WIDTH;
+      const x1 = (x0 + 1) % ELEVATION_WIDTH, fx = sourceX - floorX;
+      const top = source[y0 * ELEVATION_WIDTH + x0] * (1 - fx) + source[y0 * ELEVATION_WIDTH + x1] * fx;
+      const bottom = source[y1 * ELEVATION_WIDTH + x0] * (1 - fx) + source[y1 * ELEVATION_WIDTH + x1] * fx;
+      let hash = Math.imul(x + 17, 374761393) ^ Math.imul(y + 43, 668265263);
+      hash = Math.imul(hash ^ (hash >>> 13), 1274126177);
+      elevation[y * MAP_W + x] = Math.round((top * (1 - fy) + bottom * fy) * 32) + ((hash ^ (hash >>> 16)) & 15);
+    }
+  }
+  const icelandCountries: Country[] = [
+    { ...countries[0], id: 0, iso: "IS", name: "Islandia", flag: "🇮🇸", color: [220, 60, 60], landlocked: false },
+    { ...countries[1], id: 1, iso: "NO", name: "Inne", flag: "🇳🇴", color: [60, 120, 220] },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let i = 0; i < admin1At.length; i++) {
+    if (admin1At[i] >= 0) {
+      owners[i] = ADMIN1_ISO[admin1At[i]] === "IS" ? 0 : 1;
+    }
+  }
+  const engine = engineFrom(owners, elevation, icelandCountries, admin1At);
+  const east = DIRECTIONS.find((d) => d.short === "E")!;
+  const statsBefore = engine.getStats();
+  const totalKm2 = engine.getCountryKm2(0);
+  const fraction = 43141 / totalKm2;
+
+  const result = engine.apply({
+    rngBefore: 1577112565,
+    countryId: 0,
+    action: "erosion",
+    direction: east,
+    directionAttempts: [east],
+    actionWasRerolled: false,
+    size: "big",
+    fraction,
+    targetId: null,
+  });
+
+  const changeLayers = engine.getVectorChangeLayers();
+  const oceanLayer = changeLayers.find((layer) => layer.ownerId < 0);
+  assert.ok(oceanLayer, "eroded territory must have a change layer for water");
+  assert.equal(oceanLayer.fill, "url(#vector-map-ocean-change)", "eroded water fill must use the matching ocean gradient instead of a dark solid color");
+
+  const visited = new Uint8Array(MAP_W * MAP_H);
+  const steps = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+  const componentSizes: number[] = [];
+  for (let i = 0; i < engine.owners.length; i++) {
+    if (engine.owners[i] !== 0 || visited[i]) continue;
+    let count = 0;
+    const q = [i];
+    visited[i] = 1;
+    let h = 0;
+    while (h < q.length) {
+      const cur = q[h++];
+      count++;
+      const cx = cur % MAP_W, cy = Math.floor(cur / MAP_W);
+      for (const [ox, oy] of steps) {
+        const ny = cy + oy;
+        if (ny < 0 || ny >= MAP_H) continue;
+        const next = ny * MAP_W + ((cx + ox) % MAP_W + MAP_W) % MAP_W;
+        if (engine.owners[next] === 0 && !visited[next]) {
+          visited[next] = 1;
+          q.push(next);
+        }
+      }
+    }
+    componentSizes.push(count);
+  }
+  componentSizes.sort((a, b) => b - a);
+
+  assert.ok(componentSizes[0] > 1000, "mainland Iceland must remain intact");
+  assert.ok(componentSizes[1] > 400, "large peninsula/island (Vestfirðir) must be preserved");
+
+  const smallComponents = componentSizes.filter((size) => size <= 8);
+  assert.equal(smallComponents.length, 1, "only natural untouched islands (such as Surtsey) remain; erosion artifacts are cleaned up");
+  assert.equal(smallComponents[0], 1, "untouched natural island preserved");
+
+  assert.ok(engine.canUndo());
+  assert.ok(engine.undo());
+  assert.equal(engine.getStats()[0].cells, statsBefore[0].cells, "undo must restore exact cell count including cleaned remnants");
+  assert.deepEqual(engine.getVectorChangeLayers(), [], "undo must clear vector change layers");
+});
+
 test("large erosion continues across an archipelago until the rolled share is reached", () => {
   const owners = new Int16Array(MAP_W * MAP_H);
   owners.fill(-1);
@@ -1908,6 +2067,60 @@ test("new land reports a partial result when the rolled direction truly has no m
   assert.equal(result.changedIndices.length, 1);
   assert.equal(result.record.partial, true);
   assert.match(result.record.text, /zabrakło wolnej wody na pełne LARGE/);
+});
+
+test("new land expands organically along the coastline and bathymetry in Latvia", () => {
+  const inflatedAdmin = inflateSync(Buffer.from(ADMIN1_DEFLATE_BASE64, "base64"));
+  const admin1At = new Int16Array(inflatedAdmin.buffer, inflatedAdmin.byteOffset, inflatedAdmin.byteLength / 2);
+  const source = inflateSync(Buffer.from(ELEVATION_RANKS_DEFLATE_BASE64, "base64"));
+  const elevation = new Uint16Array(MAP_W * MAP_H);
+  for (let y = 0; y < MAP_H; y++) {
+    const sourceY = (y + 0.5) * ELEVATION_HEIGHT / MAP_H - 0.5;
+    const y0 = Math.max(0, Math.floor(sourceY)), y1 = Math.min(ELEVATION_HEIGHT - 1, y0 + 1), fy = sourceY - y0;
+    for (let x = 0; x < MAP_W; x++) {
+      const sourceX = (x + 0.5) * ELEVATION_WIDTH / MAP_W - 0.5;
+      const floorX = Math.floor(sourceX), x0 = (floorX + ELEVATION_WIDTH) % ELEVATION_WIDTH;
+      const x1 = (x0 + 1) % ELEVATION_WIDTH, fx = sourceX - floorX;
+      const top = source[y0 * ELEVATION_WIDTH + x0] * (1 - fx) + source[y0 * ELEVATION_WIDTH + x1] * fx;
+      const bottom = source[y1 * ELEVATION_WIDTH + x0] * (1 - fx) + source[y1 * ELEVATION_WIDTH + x1] * fx;
+      let hash = Math.imul(x + 17, 374761393) ^ Math.imul(y + 43, 668265263);
+      hash = Math.imul(hash ^ (hash >>> 13), 1274126177);
+      elevation[y * MAP_W + x] = Math.round((top * (1 - fy) + bottom * fy) * 32) + ((hash ^ (hash >>> 16)) & 15);
+    }
+  }
+
+  const latviaCountries: Country[] = [
+    { ...countries[0], id: 0, iso: "LV", name: "Łotwa", landlocked: false },
+    { ...countries[1], id: 1, iso: "EE", name: "Estonia", landlocked: false },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  for (let i = 0; i < admin1At.length; i++) {
+    if (admin1At[i] >= 0) {
+      owners[i] = ADMIN1_ISO[admin1At[i]] === "LV" ? 0 : 1;
+    }
+  }
+  const engine = engineFrom(owners, elevation, latviaCountries, admin1At);
+  const nw = DIRECTIONS.find((d) => d.short === "NW")!;
+  const result = engine.apply({
+    rngBefore: 1577112565,
+    countryId: 0,
+    action: "land",
+    direction: nw,
+    directionAttempts: [nw],
+    actionWasRerolled: false,
+    size: "big",
+    fraction: 0.35,
+    targetId: null,
+  });
+
+  assert.ok(result.changedIndices.length > 300);
+  const xs = result.changedIndices.map((idx) => idx % MAP_W);
+  const ys = result.changedIndices.map((idx) => Math.floor(idx / MAP_W));
+  assert.ok(xs.some((x) => x >= 2425), "new land must extend into the shallow shelf of the Gulf of Riga");
+  assert.ok(xs.some((x) => x <= 2410), "new land must extend into the western Baltic coast");
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  assert.ok(maxY - minY >= 25, "new land must extend along the coastline");
 });
 
 test("a country is recolored when conquest creates an unreadable same-color border", () => {
@@ -2914,6 +3127,7 @@ test("post-action map updates avoid the raster highlight and full-map mask rebui
   assert.ok(!changeLayerMethod.includes("this.owners.length"), "ordinary turns must not rescan every simulation cell to rebuild the vector overlay");
   assert.ok(!changeLayerMethod.includes("toDataURL"), "ordinary turns must not synchronously encode a full-size PNG mask");
   assert.ok(page.includes('className="vector-change-layer"'));
+  assert.ok(page.includes('id="vector-map-ocean-change"'), "eroded water must use the matching ocean gradient");
   assert.ok(!page.includes("vector-map-change-mask"), "changed territory must not reveal the pixel canvas below the vector atlas");
   assert.ok(page.includes('highlightRef.current = gameMode === "strategy" ? result.changedIndices : [];'));
   assert.ok(page.includes("highlightRef.current = [];"), "automatic full/war turns must also skip the blocky raster halo");
@@ -2933,6 +3147,11 @@ test("the vector change layer updates and clears only touched simulation cells",
   assert.equal(layer.ownerId, 1);
   assert.equal(layer.path, "M123 456h1v1h-1z");
   assert.match(layer.fill, /^rgb\(/);
+  engine.owners[changed] = -1;
+  internals.updateVectorChangedPixels([changed]);
+  const [oceanLayer] = engine.getVectorChangeLayers();
+  assert.equal(oceanLayer.ownerId, -1);
+  assert.equal(oceanLayer.fill, "url(#vector-map-ocean-change)");
   engine.owners[changed] = 0;
   internals.updateVectorChangedPixels([changed]);
   assert.deepEqual(engine.getVectorChangeLayers(), []);
@@ -2959,4 +3178,166 @@ test("map interaction and autosave stay off the synchronous React input path", (
   assert.ok(wheel.includes("wheelCommitTimerRef.current = window.setTimeout"));
   assert.ok(autosave.includes("requestIdleCallback"), "snapshot encoding must wait for browser idle time");
   assert.ok(!page.includes("else await wait(Math.max(70, 150 / speed))"), "ordinary actions must not have an artificial pre-apply delay");
+});
+
+test("country with zero legal actions returns empty actions, safe rollAction and safe stalemate in planTurn", () => {
+  const customCountries: Country[] = [
+    { id: 0, iso: "AA", name: "Kraj A", flag: "A", color: [220, 60, 60], initialWeight: 0, region: "europe", landlocked: true },
+    { id: 1, iso: "BB", name: "Kraj B", flag: "B", color: [60, 120, 220], initialWeight: 0, region: "africa", landlocked: false },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(1); // continent owned by unplayable Country 1 in Europe
+  for (let y = 100; y <= 110; y++) {
+    for (let x = 100; x <= 110; x++) {
+      owners[indexAt(x, y)] = -1; // 121 cells inland lake
+    }
+  }
+  // Country 0 has only 2 cells in this lake (erosion invalid since cells <= 3, land invalid on inland lake)
+  owners[indexAt(105, 105)] = 0;
+  owners[indexAt(106, 105)] = 0;
+
+  const engine = engineFrom(owners, undefined, customCountries);
+  engine.reset(1, "full", "europe", "all");
+
+  assert.equal(engine.getStats()[0].cells, 2);
+  assert.deepEqual(engine.possibleActions(0), []);
+  const rolled = engine.rollAction(0);
+  assert.equal(rolled.action, null);
+  assert.equal(rolled.possible, false);
+  assert.equal(engine.rollCountry(), null);
+  assert.equal(engine.planTurn(), null);
+});
+
+test("open sea access transitions dynamically based purely on current map across multiple conquests and cuts", () => {
+  const customCountries: Country[] = [
+    { id: 0, iso: "CH", name: "Szwajcaria", flag: "🇨🇭", color: [220, 60, 60], initialWeight: 0, landlocked: true },
+    { id: 1, iso: "AT", name: "Austria", flag: "🇦🇹", color: [60, 120, 220], initialWeight: 0, landlocked: true },
+    { id: 2, iso: "IT", name: "Włochy", flag: "🇮🇹", color: [60, 220, 120], initialWeight: 0, landlocked: false },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1); // open sea
+
+  // Block of land: x: 10..50, y: 10..30 owned by Italy (2)
+  for (let y = 10; y <= 30; y++) for (let x = 10; x <= 50; x++) owners[indexAt(x, y)] = 2;
+  // Switzerland (0) is inside at x: 15..24, y: 15..25
+  for (let y = 15; y <= 25; y++) for (let x = 15; x <= 24; x++) owners[indexAt(x, y)] = 0;
+  // Austria (1) is inside at x: 25..34, y: 15..25
+  for (let y = 15; y <= 25; y++) for (let x = 25; x <= 34; x++) owners[indexAt(x, y)] = 1;
+  // Inland lake inside Switzerland
+  owners[indexAt(17, 17)] = -1;
+
+  const engine = engineFrom(owners, undefined, customCountries);
+
+  // 1. Neither Switzerland nor Austria can roll land initially
+  assert.equal(engine.possibleActions(0).includes("land"), false);
+  assert.equal(engine.possibleActions(1).includes("land"), false);
+
+  // 2. Austria conquers a path to the open sea on the east
+  for (let x = 35; x <= 50; x++) owners[indexAt(x, 20)] = 1;
+  (engine as unknown as { visualRevision: number }).visualRevision++;
+  assert.equal(engine.possibleActions(1).includes("land"), true, "Austria can roll land after taking coast from Italy");
+
+  // 3. Switzerland conquers that exact coast from Austria (taking coast from a formerly landlocked conqueror)
+  for (let x = 25; x <= 50; x++) owners[indexAt(x, 20)] = 0;
+  (engine as unknown as { visualRevision: number }).visualRevision++;
+  assert.equal(engine.possibleActions(0).includes("land"), true, "Switzerland can roll land after conquering coast from Austria");
+  assert.equal(engine.possibleActions(1).includes("land"), false, "Austria loses land action when cut off from open sea");
+
+  // 4. Italy cuts off Switzerland from the coast again
+  for (let x = 40; x <= 50; x++) owners[indexAt(x, 20)] = 2;
+  (engine as unknown as { visualRevision: number }).visualRevision++;
+  assert.equal(engine.possibleActions(0).includes("land"), false, "Switzerland loses land action when cut off from open sea");
+});
+
+test("cleanupErosionRemnants removes small detached artifacts even as the last scrap, updating ranking, capital and undo", () => {
+  const customCountries: Country[] = [
+    { id: 0, iso: "AA", name: "Kraj A", flag: "A", color: [220, 60, 60], initialWeight: 100, capital: { name: "Stolica A", latitude: 0, longitude: 0 } },
+    { id: 1, iso: "BB", name: "Kraj B", flag: "B", color: [60, 120, 220], initialWeight: 100, capital: { name: "Stolica B", latitude: 10, longitude: 10 } },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+  // Country 0 has only a 2-pixel scrap at (100, 100) and (101, 100):
+  owners[indexAt(100, 100)] = 0;
+  owners[indexAt(101, 100)] = 0;
+  for (let y = 500; y <= 510; y++) for (let x = 500; x <= 510; x++) owners[indexAt(x, y)] = 1;
+
+  const engine = engineFrom(owners, undefined, customCountries);
+  const changed: Array<[number, number]> = [[indexAt(100, 100), 0]];
+  owners[indexAt(100, 100)] = -1;
+
+  const internals = engine as unknown as {
+    cleanupErosionRemnants(actorId: number, changed: Array<[number, number]>, initialRemaining: number): void;
+    commitOwnerChanges(changes: Array<[number, number]>): void;
+    undoStack: Array<{ rngBefore: number; changed: Array<[number, number]>; color: [number, number, number]; countryId: number; defeatedId: number | null }>;
+  };
+  internals.cleanupErosionRemnants(0, changed, 1);
+
+  // The remaining 1-pixel scrap must be pruned to water:
+  assert.equal(engine.owners[indexAt(101, 100)], -1);
+  internals.commitOwnerChanges(changed);
+  assert.equal(engine.getStats()[0].cells, 0);
+
+  const ranking = engine.getRanking();
+  assert.equal(ranking.find((r) => r.countryId === 0)?.active, false);
+  assert.equal(ranking.find((r) => r.countryId === 0)?.rank, 0);
+
+  // Undo restores both cells
+  internals.undoStack.push({
+    rngBefore: 1,
+    changed,
+    color: [220, 60, 60],
+    countryId: 0,
+    defeatedId: null,
+  });
+  engine.undo();
+  assert.equal(engine.owners[indexAt(100, 100)], 0);
+  assert.equal(engine.owners[indexAt(101, 100)], 0);
+  assert.equal(engine.getStats()[0].cells, 2);
+});
+
+test("cleanupErosionRemnants preserves larger islands and largeSeen skips redundant component scans", () => {
+  const customCountries: Country[] = [
+    { id: 0, iso: "AA", name: "Kraj A", flag: "A", color: [220, 60, 60], initialWeight: 100 },
+    { id: 1, iso: "BB", name: "Kraj B", flag: "B", color: [60, 120, 220], initialWeight: 100 },
+  ];
+  const owners = new Int16Array(MAP_W * MAP_H);
+  owners.fill(-1);
+
+  // Mainland (30x30 = 900 cells):
+  for (let y = 100; y <= 129; y++) for (let x = 100; x <= 129; x++) owners[indexAt(x, y)] = 0;
+  // Detached real island of 12 cells (3x4):
+  for (let y = 200; y <= 202; y++) for (let x = 200; x <= 203; x++) owners[indexAt(x, y)] = 0;
+  // Detached small artefact of 2 cells:
+  owners[indexAt(300, 300)] = 0;
+  owners[indexAt(301, 300)] = 0;
+  for (let y = 500; y <= 510; y++) for (let x = 500; x <= 510; x++) owners[indexAt(x, y)] = 1;
+
+  const engine = engineFrom(owners, undefined, customCountries);
+
+  // Erode a 5x10 strip along the top border of the mainland:
+  const changed: Array<[number, number]> = [];
+  for (let y = 100; y <= 104; y++) {
+    for (let x = 105; x <= 114; x++) {
+      changed.push([indexAt(x, y), 0]);
+      owners[indexAt(x, y)] = -1;
+    }
+  }
+  // Also erode 1 cell of the 2-cell artefact:
+  changed.push([indexAt(300, 300), 0]);
+  owners[indexAt(300, 300)] = -1;
+
+  const internals = engine as unknown as {
+    cleanupErosionRemnants(actorId: number, changed: Array<[number, number]>, initialRemaining: number): void;
+    commitOwnerChanges(changes: Array<[number, number]>): void;
+  };
+
+  const t0 = performance.now();
+  internals.cleanupErosionRemnants(0, changed, 900 + 12 + 2 - changed.length);
+  const t1 = performance.now();
+
+  assert.ok(t1 - t0 < 50, `largeSeen must complete without redundant scanning: took ${t1 - t0}ms`);
+  // Dead 1-pixel remnant of the 2-cell artefact was pruned:
+  assert.equal(engine.owners[indexAt(301, 300)], -1, "small remnant pruned");
+  // 12-cell island was preserved:
+  assert.equal(engine.owners[indexAt(200, 200)], 0, "12-cell real island preserved");
 });
