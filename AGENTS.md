@@ -6,6 +6,7 @@ To repozytorium jest kanonicznym źródłem kodu gry.
 
 - Przed zmianą sprawdź stan Git i nie nadpisuj cudzej niezacommitowanej pracy.
 - Przy każdej pracy wymagającej kodowania w tej grze Codex jest zlecającym: przekazuje zadanie Gemini działającemu na `HP-MALY`. Gemini wykonuje zmiany w kodzie i testach na HP.
+- Przed uruchomieniem Gemini na HP podaj użytkownikowi dokładny model i poziom wysiłku. Przed pierwszym użyciem bez zatwierdzonego poziomu i przed każdą zmianą poziomu (`high`, `medium`, `low` lub innego) zapytaj użytkownika i czekaj na wyraźną zgodę; nie zmieniaj poziomu po cichu z powodu błędu, opóźnienia ani braku odpowiedzi.
 - Codex odbiera wynik, przegląda diff, sprawdza działanie i testy. Jeśli są błędy lub braki, odsyła konkretne poprawki do Gemini na HP i ponownie weryfikuje wynik. Nie zastępuje Gemini własnym kodowaniem bez nowej, wyraźnej dyspozycji użytkownika.
 - Gdy Gemini na HP jest niedostępne, zgłoś przeszkodę użytkownikowi; nie przechodź po cichu na lokalne kodowanie.
 - Po każdej spójnej zmianie uruchom `npm test`.
