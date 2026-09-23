@@ -3326,7 +3326,7 @@ export class WorldEngine {
       return [{ countryId: country.id, countryName: country.name, name: capital.name, x: capital.x, y: capital.y, controlled: this.strategicRegions[capital.regionId]?.ownerId === country.id, regionId: capital.regionId, relocated: capital.relocated }];
     });
     const stats = this.stats();
-    if (this.gameMode === "war") return this.countries.flatMap((country) => {
+    return this.countries.flatMap((country) => {
       const capital = this.capitalStates[country.id];
       if (!capital || capital.index === null || !stats[country.id]?.cells) return [];
       const x = capital.index % MAP_W, y = Math.floor(capital.index / MAP_W);
@@ -3339,23 +3339,6 @@ export class WorldEngine {
         controlled: this.owners[capital.index] === country.id,
         regionId: null,
         relocated: capital.relocated,
-      }];
-    });
-    return this.countries.flatMap((country) => {
-      if (!country.capital || !stats[country.id]?.cells) return [];
-      const x = ((country.capital.longitude + 180) / 360 + 1) % 1;
-      const y = Math.max(0, Math.min(1, (90 - country.capital.latitude) / 180));
-      const sourceX = wrapX(Math.floor(x * MAP_W));
-      const sourceY = Math.max(0, Math.min(MAP_H - 1, Math.floor(y * MAP_H)));
-      return [{
-        countryId: country.id,
-        countryName: country.name,
-        name: country.capital.name,
-        x: x * 100,
-        y: y * 100,
-        controlled: this.owners[sourceY * MAP_W + sourceX] === country.id,
-        regionId: null,
-        relocated: false,
       }];
     });
   }
@@ -3612,7 +3595,7 @@ export class WorldEngine {
     return best;
   }
 
-  private relocatedWarCapitalIndex(countryId: number, stats: Stats[]) {
+  private relocatedCapitalIndex(countryId: number, stats: Stats[]) {
     const territory = this.largestRemainingTerritory(countryId, countryId, stats);
     if (!territory) return null;
     const visited = new Uint8Array(this.owners.length), queue = [territory.seed], steps = [[-1, 0], [1, 0], [0, -1], [0, 1]];
@@ -3632,6 +3615,21 @@ export class WorldEngine {
       }
     }
     return nearest;
+  }
+
+  private relocateLostFullCapitals(stats: Stats[]) {
+    const relocated: string[] = [];
+    for (const country of this.countries) {
+      const capital = this.capitalStates[country.id];
+      if (!capital || capital.index === null || !stats[country.id]?.cells || this.owners[capital.index] === country.id) continue;
+      const index = this.relocatedCapitalIndex(country.id, stats);
+      if (index === null) continue;
+      capital.index = index;
+      capital.lostTurn = null;
+      capital.relocated = true;
+      relocated.push(country.name);
+    }
+    return relocated;
   }
 
   private coast(actorId: number, direction: Direction, stats: Stats[]) {
@@ -4488,7 +4486,7 @@ export class WorldEngine {
     let landNeighbours: number[] | undefined;
     const actorColorBefore: [number, number, number] = [actor.color[0], actor.color[1], actor.color[2]];
     const warExhaustionBefore = this.gameMode === "war" ? [...this.warExhaustion] : undefined;
-    const capitalStatesBefore = this.gameMode === "war" ? this.capitalStates.map((capital) => capital ? { ...capital } : null) : undefined;
+    const capitalStatesBefore = this.gameMode !== "strategy" ? this.capitalStates.map((capital) => capital ? { ...capital } : null) : undefined;
     const warMinShareBefore = this.gameMode === "war" ? [...this.warMinShare] : undefined;
     let goal = before[plan.countryId].weight * plan.fraction;
     let target: Country | null = null;
@@ -4597,6 +4595,10 @@ export class WorldEngine {
     if (eliminated && target) this.defeats[actor.id]++;
     this.turn++;
     let capitalLost: string | undefined, capitalRelocated: string | undefined;
+    if (this.gameMode === "full") {
+      const relocated = this.relocateLostFullCapitals(after);
+      if (relocated.length) capitalRelocated = relocated.join(", ");
+    }
     if (this.gameMode === "war") {
       this.warMinShare = this.countries.map((country) => {
         const share = country.initialWeight ? (after[country.id]?.weight ?? 0) / country.initialWeight : 0;
@@ -4612,7 +4614,7 @@ export class WorldEngine {
       for (const country of this.countries) {
         const capital = this.capitalStates[country.id];
         if (!capital || capital.lostTurn === null || this.turn - capital.lostTurn < WAR_CAPITAL_RELOCATION_TURNS || !after[country.id]?.cells) continue;
-        const index = this.relocatedWarCapitalIndex(country.id, after);
+        const index = this.relocatedCapitalIndex(country.id, after);
         if (index === null) continue;
         capital.index = index;
         capital.lostTurn = null;
@@ -4634,6 +4636,7 @@ export class WorldEngine {
           ? `${actor.name} traci przez erozję tylko około ${formatNumber(changedKm2)} km² — zachowano minimalne terytorium państwa.`
           : `${actor.name} traci przez erozję około ${formatNumber(changedKm2)} km².`;
     if (capitalLost) text = `${text.replace(/\.$/, "")}, stolica ${capitalLost} upada`;
+    if (capitalRelocated && this.gameMode === "full") text = `${text.replace(/\.$/, "")}, stolica zostaje przeniesiona (${capitalRelocated}).`;
     if (bridgeTo) text = `${text.replace(/\.$/, "")}, nowy ląd łączy je z ${bridgeTo}.`;
     const record: TurnRecord = {
       turn: this.turn, countryId: actor.id, countryName: actor.name, countryFlag: actor.flag,
@@ -4643,6 +4646,13 @@ export class WorldEngine {
       changedKm2, actualFraction, partial, eliminated, ...(capitalLost ? { capitalLost } : {}), ...(capitalRelocated ? { capitalRelocated } : {}), ...(bridgeTo ? { bridgeTo } : {}), text,
     };
     const cataclysmRecord = this.runCataclysm(actor, changed);
+    if (cataclysmRecord && this.gameMode === "full") {
+      const relocated = this.relocateLostFullCapitals(this.stats());
+      if (relocated.length) {
+        cataclysmRecord.capitalRelocated = relocated.join(", ");
+        cataclysmRecord.text = `${cataclysmRecord.text.replace(/\.$/, "")}, przeniesiono stolice: ${relocated.join(", ")}.`;
+      }
+    }
     this.history = [...this.history, record, ...(cataclysmRecord ? [cataclysmRecord] : [])].slice(-120);
     this.undoStack = [...this.undoStack, {
       rngBefore: plan.rngBefore, changed, color: actorColorBefore, countryId: actor.id, defeatedId: eliminated && target ? target.id : null,
@@ -4746,7 +4756,7 @@ export class WorldEngine {
       strategicDefenseState: this.gameMode === "strategy" ? { ...this.strategicDefenseState } : undefined,
       strategicCapitals: this.gameMode === "strategy" ? this.strategicCapitals.map((capital) => capital ? { ...capital } : null) : undefined,
       warExhaustion: this.gameMode === "war" ? [...this.warExhaustion] : undefined,
-      capitalStates: this.gameMode === "war" ? this.capitalStates.map((capital) => capital ? { ...capital } : null) : undefined,
+      capitalStates: this.gameMode !== "strategy" ? this.capitalStates.map((capital) => capital ? { ...capital } : null) : undefined,
       warVetoesLeft: this.gameMode === "war" ? this.warVetoesLeft : undefined,
       warUndosLeft: this.gameMode === "war" ? this.warUndosLeft : undefined,
       warGuarantee: this.gameMode === "war" ? this.warGuarantee ? { ...this.warGuarantee } : null : undefined,
@@ -4892,6 +4902,7 @@ export class WorldEngine {
     this.defeats = snapshot.defeats ? [...snapshot.defeats] : this.countries.map(({ id }) => nextHistory.filter((record) => record.countryId === id && record.eliminated).length);
     this.warExhaustion = snapshot.warExhaustion ? [...snapshot.warExhaustion] : this.countries.map(() => 0);
     this.capitalStates = snapshot.capitalStates ? snapshot.capitalStates.map((capital) => capital ? { ...capital } : null) : this.initialWarCapitalStates();
+    if (this.gameMode === "full") this.relocateLostFullCapitals(this.stats());
     this.warVetoesLeft = snapshot.warVetoesLeft ?? (this.gameMode === "war" ? WAR_VETO_LIMIT : 0);
     this.warUndosLeft = snapshot.warUndosLeft ?? (this.gameMode === "war" ? WAR_UNDO_LIMIT : 0);
     this.warGuarantee = snapshot.warGuarantee ? { ...snapshot.warGuarantee } : null;

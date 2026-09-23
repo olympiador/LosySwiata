@@ -2022,6 +2022,53 @@ test("war mode blocks a country after capital loss and relocates its government 
   assert.equal(placement?.name, "Siedziba rządu, Cel");
 });
 
+test("full mode immediately relocates a capital lost to erosion or conquest", () => {
+  const north = DIRECTIONS.find((direction) => direction.short === "N") as Direction;
+  const east = DIRECTIONS.find((direction) => direction.short === "E") as Direction;
+
+  const erodedOwners = new Int16Array(MAP_W * MAP_H); erodedOwners.fill(-1);
+  for (let y = 100; y <= 130; y++) for (let x = 100; x <= 130; x++) erodedOwners[indexAt(x, y)] = 0;
+  const erodedCountries: Country[] = [
+    { ...countries[0], capital: capitalAt("Stara Stolica", 115, 100) },
+    countries[1],
+  ];
+  const eroded = engineFrom(erodedOwners, undefined, erodedCountries);
+  const oldErodedCapital = eroded.snapshot().capitalStates![0]!.index!;
+  const erosion = eroded.apply({
+    rngBefore: eroded.rngState, countryId: 0, action: "erosion", direction: north,
+    directionAttempts: [north], actionWasRerolled: false, size: "big", fraction: .35, targetId: null,
+  });
+  const erodedPlacement = eroded.getCapitalPlacements().find(({ countryId }) => countryId === 0);
+  assert.equal(eroded.owners[oldErodedCapital], -1, "erosion must remove the old capital cell in this fixture");
+  assert.equal(erodedPlacement?.relocated, true);
+  assert.equal(erodedPlacement?.controlled, true);
+  assert.equal(erosion.record.capitalRelocated, "Atakujący");
+  assert.equal(eroded.snapshot().capitalStates?.[0]?.relocated, true, "full-mode saves must preserve the new seat");
+  assert.equal(eroded.undo(), true);
+  const restoredCapital = eroded.getCapitalPlacements().find(({ countryId }) => countryId === 0);
+  assert.equal(restoredCapital?.relocated, false, "undo must restore the original capital");
+  assert.equal(restoredCapital?.name, "Stara Stolica");
+
+  const conqueredOwners = new Int16Array(MAP_W * MAP_H); conqueredOwners.fill(-1);
+  for (let y = 200; y <= 210; y++) for (let x = 200; x <= 210; x++) conqueredOwners[indexAt(x, y)] = 0;
+  for (let y = 200; y <= 210; y++) for (let x = 211; x <= 230; x++) conqueredOwners[indexAt(x, y)] = 1;
+  const conqueredCountries: Country[] = [
+    { ...countries[0], capital: capitalAt("Stolica A", 205, 205) },
+    { ...countries[1], capital: capitalAt("Stolica B", 211, 205) },
+  ];
+  const conquered = engineFrom(conqueredOwners, undefined, conqueredCountries);
+  const oldConqueredCapital = conquered.snapshot().capitalStates![1]!.index!;
+  const conquest = conquered.apply({
+    rngBefore: conquered.rngState, countryId: 0, action: "war", direction: east,
+    directionAttempts: [east], actionWasRerolled: false, size: "small", fraction: .05, targetId: 1,
+  });
+  const conqueredPlacement = conquered.getCapitalPlacements().find(({ countryId }) => countryId === 1);
+  assert.equal(conquered.owners[oldConqueredCapital], 0, "the attacker must capture the old capital cell in this fixture");
+  assert.equal(conqueredPlacement?.relocated, true);
+  assert.equal(conqueredPlacement?.controlled, true);
+  assert.equal(conquest.record.capitalRelocated, "Cel");
+});
+
 test("war mode increases gains against a country without a capital up to the defender clamp", () => {
   const owners = new Int16Array(MAP_W * MAP_H);
   owners.fill(-1);
