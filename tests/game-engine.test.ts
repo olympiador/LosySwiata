@@ -14,6 +14,9 @@ import type { StrategicCampaign, StrategicWarHistoryEntry } from "../app/game-en
 import { decodePopulationGrid, loadPopulationGrid, POPULATION_GRID_URL } from "../app/population-grid";
 import { STRATEGIC_CASUS_BELLI, deriveStrategicResourceSecurity, strategicObjectives } from "../app/strategic-systems";
 import { ELEVATION_RANKS_DEFLATE_BASE64, ELEVATION_WIDTH, ELEVATION_HEIGHT } from "../app/elevation-data";
+import vectorAtlas from "world-atlas/countries-10m.json";
+import { feature, merge } from "topojson-client";
+import { geoEquirectangular, geoPath } from "d3-geo";
 
 Object.defineProperty(globalThis, "document", {
   configurable: true,
@@ -41,6 +44,7 @@ const EngineConstructor = WorldEngine as unknown as new (
   airports?: Uint16Array,
   ports?: Uint16Array,
   populationGrid?: Float32Array,
+  vectorPaths?: Array<{ countryId: number; path: string }>,
 ) => WorldEngine;
 
 function engineFrom(owners: Int16Array, elevation?: Uint16Array, sourceCountries = countries, admin1At?: Int16Array) {
@@ -3403,4 +3407,290 @@ test("cleanupErosionRemnants preserves larger islands and largeSeen skips redund
   assert.equal(engine.owners[indexAt(301, 300)], -1, "small remnant pruned");
   // 12-cell island was preserved:
   assert.equal(engine.owners[indexAt(200, 200)], 0, "12-cell real island preserved");
+});
+
+test("annexation via War ALL merges vector base map geometry and eliminates obsolete border on zoom-out", () => {
+  const vectorProjection = geoEquirectangular().translate([1, .5]).scale(1 / Math.PI).precision(.000015);
+  const vectorPath = geoPath(vectorProjection).pointRadius(.0014).digits(7);
+
+  const ngGeom = (vectorAtlas as unknown as { objects: { countries: { geometries: Array<{ id: string | number }> } } }).objects.countries.geometries.find((g) => String(g.id) === "566");
+  const cmGeom = (vectorAtlas as unknown as { objects: { countries: { geometries: Array<{ id: string | number }> } } }).objects.countries.geometries.find((g) => String(g.id) === "120");
+  const tdGeom = (vectorAtlas as unknown as { objects: { countries: { geometries: Array<{ id: string | number }> } } }).objects.countries.geometries.find((g) => String(g.id) === "148");
+
+  assert.ok(ngGeom && cmGeom && tdGeom, "test geometries for Nigeria, Cameroon and Chad must be present in vector atlas");
+
+  const ngPath = vectorPath(feature(vectorAtlas as never, ngGeom as never));
+  const cmPath = vectorPath(feature(vectorAtlas as never, cmGeom as never));
+  const tdPath = vectorPath(feature(vectorAtlas as never, tdGeom as never));
+  assert.ok(ngPath && cmPath && tdPath, "vector paths must be generated");
+
+  const expectedNgCmGeom = merge(vectorAtlas as never, [ngGeom, cmGeom] as never);
+  const expectedNgCmPath = vectorPath(expectedNgCmGeom)!;
+  assert.ok(expectedNgCmPath, "expected merged path must be generated");
+
+  const testCountries: Country[] = [
+    { id: 0, iso: "NG", numeric: "566", name: "Nigeria", flag: "🇳🇬", color: [34, 139, 34], initialWeight: 100 },
+    { id: 1, iso: "CM", numeric: "120", name: "Kamerun", flag: "🇨🇲", color: [0, 122, 94], initialWeight: 80 },
+    { id: 2, iso: "TD", numeric: "148", name: "Czad", flag: "🇹🇩", color: [200, 160, 40], initialWeight: 90 },
+  ];
+
+  const makeOwners = () => {
+    const o = new Int16Array(MAP_W * MAP_H);
+    o.fill(-1);
+    for (let y = 1000; y < 1010; y++) {
+      for (let x = 1000; x < 1010; x++) o[indexAt(x, y)] = 0;
+      for (let x = 1010; x < 1020; x++) o[indexAt(x, y)] = 1;
+      for (let x = 1020; x < 1030; x++) o[indexAt(x, y)] = 2;
+    }
+    return o;
+  };
+
+  const engine = new EngineConstructor(
+    testCountries, makeOwners(), makeOwners(), 1, undefined, undefined, undefined, undefined, undefined,
+    [{ countryId: 0, path: ngPath }, { countryId: 1, path: cmPath }, { countryId: 2, path: tdPath }]
+  );
+
+  assert.equal(engine.getVectorMapCountries().length, 3);
+
+  function arcInteriorPoint(topology: any, arcIndex: number) {
+    const arc = topology.arcs[arcIndex];
+    let x = 0, y = 0;
+    const mid = Math.floor(arc.length / 2);
+    let ptMid = [0, 0];
+    for (let i = 0; i <= mid; i++) {
+      x += arc[i][0];
+      y += arc[i][1];
+      if (i === mid) ptMid = [x, y];
+    }
+    const [lon, lat] = [
+      ptMid[0] * topology.transform.scale[0] + topology.transform.translate[0],
+      ptMid[1] * topology.transform.scale[1] + topology.transform.translate[1],
+    ];
+    const pt = vectorProjection([lon, lat])!;
+    return `${pt[0].toFixed(7)},${pt[1].toFixed(7)}`;
+  }
+
+  const ngCmInterior = arcInteriorPoint(vectorAtlas, 1864);
+  const cmTdInterior = arcInteriorPoint(vectorAtlas, 1959);
+
+  // Initial state assertions
+  assert.ok(ngPath.includes(ngCmInterior), "pre-war Nigeria path must contain shared Nigeria-Cameroon border (arc 1864)");
+  assert.ok(cmPath.includes(ngCmInterior), "pre-war Cameroon path must contain shared Nigeria-Cameroon border (arc 1864)");
+  assert.ok(cmPath.includes(cmTdInterior), "pre-war Cameroon path must contain Cameroon-Chad border (arc 1959)");
+  assert.ok(!ngPath.includes(cmTdInterior), "pre-war Nigeria path must not contain Cameroon-Chad border");
+
+  // Nigeria attacks Cameroon with War S ALL
+  const south = DIRECTIONS.find((d) => d.short === "S") as Direction;
+  const result = engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "war", direction: south, directionAttempts: [south],
+    actionWasRerolled: false, size: "all", fraction: 1, targetId: 1,
+  });
+
+  assert.equal(result.record.directionShort, "S");
+  assert.equal(result.record.eliminated, "Kamerun");
+  assert.equal(engine.getStats()[1].cells, 0, "Cameroon must have 0 cells after ALL conquest");
+
+  // Post-annexation geometry verification
+  const postCountries = engine.getVectorMapCountries();
+  assert.equal(postCountries.length, 2, "annexed Cameroon must be omitted from vectorMapCountries");
+  assert.equal(postCountries.find((c) => c.countryId === 1), undefined, "Cameroon must not be rendered separately in SVG");
+
+  const postNg = postCountries.find((c) => c.countryId === 0)!;
+  assert.equal(postNg.path, expectedNgCmPath, "Nigeria vector path must match TopoJSON merged geometry");
+  assert.ok(!postNg.path.includes(ngCmInterior), "obsolete internal Nigeria-Cameroon border must be eliminated from vector path");
+  assert.ok(postNg.path.includes(cmTdInterior), "new external border with Chad must now belong to Nigeria merged vector path");
+
+  // Vector change layers verification
+  assert.deepEqual(engine.getVectorChangeLayers(), [], "annexed territory must not generate coarse raster vectorChangeLayers");
+
+  // Meaningful geometry verification across visible SVG vector layers:
+  // 1) Verify obsolete internal border arc (1864) is absent from every visible vector country
+  for (const country of postCountries) {
+    assert.ok(!country.path.includes(ngCmInterior), `country ${country.countryId} path must not contain obsolete internal border`);
+  }
+  // 2) Verify merged geometry bounds encompass both pre-war Nigeria and Cameroon
+  const [[ngMinX, ngMinY], [ngMaxX, ngMaxY]] = vectorPath.bounds(feature(vectorAtlas as never, ngGeom as never));
+  const [[cmMinX, cmMinY], [cmMaxX, cmMaxY]] = vectorPath.bounds(feature(vectorAtlas as never, cmGeom as never));
+  const [[mergedMinX, mergedMinY], [mergedMaxX, mergedMaxY]] = vectorPath.bounds(expectedNgCmGeom);
+  assert.ok(mergedMinX <= ngMinX + 1e-4 && mergedMaxX >= cmMaxX - 1e-4, "merged vector bounds span from western Nigeria to eastern Cameroon");
+  assert.ok(mergedMaxY >= cmMaxY - 1e-4, "merged vector bounds extend south to Cameroon southern limit");
+
+  // Undo verification
+  assert.ok(engine.undo());
+  assert.equal(engine.getVectorMapCountries().length, 3, "undo must restore Cameroon to vectorMapCountries");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, ngPath, "undo must restore Nigeria pre-war path");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 1)!.path, cmPath, "undo must restore Cameroon pre-war path");
+
+  // Re-apply and snapshot/load verification
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "war", direction: south, directionAttempts: [south],
+    actionWasRerolled: false, size: "all", fraction: 1, targetId: 1,
+  });
+  const snapshot = engine.snapshot();
+  const loadedEngine = new EngineConstructor(
+    testCountries, makeOwners(), makeOwners(), 1, undefined, undefined, undefined, undefined, undefined,
+    [{ countryId: 0, path: ngPath }, { countryId: 1, path: cmPath }, { countryId: 2, path: tdPath }]
+  );
+  loadedEngine.load(snapshot);
+  assert.equal(loadedEngine.getVectorMapCountries().length, 2, "loaded engine must restore merged vector countries");
+  assert.equal(loadedEngine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, expectedNgCmPath);
+
+  // Reset verification
+  loadedEngine.reset();
+  assert.equal(loadedEngine.getVectorMapCountries().length, 3, "reset must restore initial vector countries");
+  assert.equal(loadedEngine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, ngPath);
+  assert.equal(loadedEngine.getVectorMapCountries().find((c) => c.countryId === 1)!.path, cmPath);
+});
+
+test("annexation vector merge preserves second elimination, split ownership, re-annexation, undo/load, and handles countries lacking numeric safely", () => {
+  const vectorProjection = geoEquirectangular().translate([1, .5]).scale(1 / Math.PI).precision(.000015);
+  const vectorPath = geoPath(vectorProjection).pointRadius(.0014).digits(7);
+
+  const ngGeom = (vectorAtlas as unknown as { objects: { countries: { geometries: Array<{ id: string | number }> } } }).objects.countries.geometries.find((g) => String(g.id) === "566");
+  const cmGeom = (vectorAtlas as unknown as { objects: { countries: { geometries: Array<{ id: string | number }> } } }).objects.countries.geometries.find((g) => String(g.id) === "120");
+  const tdGeom = (vectorAtlas as unknown as { objects: { countries: { geometries: Array<{ id: string | number }> } } }).objects.countries.geometries.find((g) => String(g.id) === "148");
+
+  assert.ok(ngGeom && cmGeom && tdGeom);
+
+  const ngPath = vectorPath(feature(vectorAtlas as never, ngGeom as never))!;
+  const cmPath = vectorPath(feature(vectorAtlas as never, cmGeom as never))!;
+  const tdPath = vectorPath(feature(vectorAtlas as never, tdGeom as never))!;
+  const customPath = "M0.5,0.5L0.6,0.5L0.6,0.6L0.5,0.6Z";
+
+  const expectedNgCmGeom = merge(vectorAtlas as never, [ngGeom, cmGeom] as never);
+  const expectedNgCmPath = vectorPath(expectedNgCmGeom)!;
+  const expectedNgCmTdGeom = merge(vectorAtlas as never, [ngGeom, cmGeom, tdGeom] as never);
+  const expectedNgCmTdPath = vectorPath(expectedNgCmTdGeom)!;
+
+  const testCountries: Country[] = [
+    { id: 0, iso: "NG", numeric: "566", name: "Nigeria", flag: "🇳🇬", color: [34, 139, 34], initialWeight: 100 },
+    { id: 1, iso: "CM", numeric: "120", name: "Kamerun", flag: "🇨🇲", color: [0, 122, 94], initialWeight: 80 },
+    { id: 2, iso: "TD", numeric: "148", name: "Czad", flag: "🇹🇩", color: [200, 160, 40], initialWeight: 90 },
+    { id: 3, iso: "XX", name: "CustomNoNum", flag: "🏳️", color: [120, 120, 120], initialWeight: 50 },
+  ];
+
+  const makeOwners = () => {
+    const o = new Int16Array(MAP_W * MAP_H);
+    o.fill(-1);
+    for (let y = 1000; y < 1010; y++) {
+      for (let x = 1000; x < 1010; x++) o[indexAt(x, y)] = 0;
+      for (let x = 1010; x < 1020; x++) o[indexAt(x, y)] = 1;
+      for (let x = 1020; x < 1030; x++) o[indexAt(x, y)] = 2;
+      for (let x = 1030; x < 1040; x++) o[indexAt(x, y)] = 3;
+    }
+    return o;
+  };
+
+  const initialVectorPaths = [
+    { countryId: 0, path: ngPath },
+    { countryId: 1, path: cmPath },
+    { countryId: 2, path: tdPath },
+    { countryId: 3, path: customPath },
+  ];
+
+  const engine = new EngineConstructor(
+    testCountries, makeOwners(), makeOwners(), 1, undefined, undefined, undefined, undefined, undefined,
+    initialVectorPaths,
+  );
+
+  const south = DIRECTIONS.find((d) => d.short === "S") as Direction;
+  const west = DIRECTIONS.find((d) => d.short === "W") as Direction;
+  const east = DIRECTIONS.find((d) => d.short === "E") as Direction;
+
+  // 1) Nigeria annexes Cameroon
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "war", direction: south, directionAttempts: [south],
+    actionWasRerolled: false, size: "all", fraction: 1, targetId: 1,
+  });
+  assert.equal(engine.getVectorMapCountries().length, 3);
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, expectedNgCmPath);
+
+  // 2) Measurable optimization verification: actions not touching eliminated territory skip syncAnnexations
+  const engineAny = engine as unknown as { syncAnnexations(): boolean };
+  let syncCalls = 0;
+  const origSync = engineAny.syncAnnexations.bind(engine);
+  engineAny.syncAnnexations = () => {
+    syncCalls++;
+    return origSync();
+  };
+
+  // Chad attacks Country 3: neither country is eliminated, neither touches Cameroon
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 2, action: "war", direction: east, directionAttempts: [east],
+    actionWasRerolled: false, size: "tiny", fraction: 0.1, targetId: 3,
+  });
+  assert.equal(syncCalls, 0, "subsequent actions touching non-annexed territory must not run syncAnnexations");
+
+  // 3) Split ownership: Chad attacks Nigeria westward, capturing cells in Cameroon
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 2, action: "war", direction: west, directionAttempts: [west],
+    actionWasRerolled: false, size: "tiny", fraction: 0.1, targetId: 0,
+  });
+  assert.equal(syncCalls, 1, "action touching annexed country territory must trigger syncAnnexations");
+  // Cameroon territory is now split between Nigeria and Chad
+  assert.equal(engine.getVectorMapCountries().length, 4, "split ownership must restore Cameroon as separate vector country");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, ngPath, "Nigeria path restored to unmerged");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 1)!.path, cmPath, "Cameroon path restored to unmerged");
+  assert.ok(engine.getVectorChangeLayers().length > 0, "split territory must be covered by vectorChangeLayers");
+
+  // 4) Undo split ownership
+  assert.ok(engine.undo());
+  assert.equal(engine.getVectorMapCountries().length, 3, "undo must re-merge Cameroon under Nigeria");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, expectedNgCmPath);
+
+  // 5) Re-annexation: Chad captures all remaining Cameroon cells from Nigeria
+  // First attack captures 74% of Cameroon
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 2, action: "war", direction: west, directionAttempts: [west],
+    actionWasRerolled: false, size: "large", fraction: 0.75, targetId: 0,
+  });
+  assert.equal(engine.getVectorMapCountries().length, 4, "first conquest leaves Cameroon split");
+  // Second attack captures remaining 26% of Cameroon
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 2, action: "war", direction: west, directionAttempts: [west],
+    actionWasRerolled: false, size: "large", fraction: 0.75, targetId: 0,
+  });
+  // Now Chad owns 100% of Cameroon, while Nigeria is still alive
+  assert.equal(engine.getVectorMapCountries().length, 3, "re-annexation must omit Cameroon from vector countries");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, ngPath, "Nigeria path is unmerged");
+  const expectedTdCmGeom = merge(vectorAtlas as never, [tdGeom, cmGeom] as never);
+  const expectedTdCmPath = vectorPath(expectedTdCmGeom)!;
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 2)!.path, expectedTdCmPath, "Chad vector path must merge with re-annexed Cameroon");
+
+  // 6) Undo re-annexation back to split, then back to Nigeria annexation
+  assert.ok(engine.undo());
+  assert.equal(engine.getVectorMapCountries().length, 4, "undoing second attack restores split Cameroon");
+  assert.ok(engine.undo());
+  assert.equal(engine.getVectorMapCountries().length, 3, "undoing first attack restores Nigeria-Cameroon annexation");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, expectedNgCmPath);
+
+  // 7) Second elimination: Nigeria now attacks Chad with War S ALL
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "war", direction: south, directionAttempts: [south],
+    actionWasRerolled: false, size: "all", fraction: 1, targetId: 2,
+  });
+  assert.equal(engine.getVectorMapCountries().length, 2, "second elimination: only Nigeria and Country 3 remain");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, expectedNgCmTdPath, "Nigeria path merges Nigeria, Cameroon, and Chad");
+
+  // 8) Country lacking numeric: Nigeria attacks Country 3 (lacks numeric in TopoJSON) with War S ALL
+  engine.apply({
+    rngBefore: engine.rngState, countryId: 0, action: "war", direction: south, directionAttempts: [south],
+    actionWasRerolled: false, size: "all", fraction: 1, targetId: 3,
+  });
+  // Country lacking numeric must not crash merge, must remain visible in vector countries, and drawn via change layer
+  assert.equal(engine.getVectorMapCountries().length, 2, "country lacking numeric is not merged into TopoJSON vector path");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 0)!.path, expectedNgCmTdPath, "Nigeria path remains valid 3-way merge");
+  assert.equal(engine.getVectorMapCountries().find((c) => c.countryId === 3)!.path, customPath, "Country 3 retains initial path");
+  assert.ok(engine.getVectorChangeLayers().some((l) => l.ownerId === 0), "Country 3 territory is drawn via raster vectorChangeLayers");
+
+  // 9) Snapshot / Load roundtrip with multi-annexed state
+  const snapshot = engine.snapshot();
+  const loaded = new EngineConstructor(
+    testCountries, makeOwners(), makeOwners(), 1, undefined, undefined, undefined, undefined, undefined,
+    initialVectorPaths,
+  );
+  loaded.load(snapshot);
+  assert.equal(loaded.getVectorMapCountries().length, 2);
+  assert.equal(loaded.getVectorMapCountries().find((c) => c.countryId === 0)!.path, expectedNgCmTdPath);
+  assert.equal(loaded.getVectorMapCountries().find((c) => c.countryId === 3)!.path, customPath);
 });

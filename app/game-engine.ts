@@ -1,5 +1,5 @@
 import { geoArea, geoEquirectangular, geoPath } from "d3-geo";
-import { feature } from "topojson-client";
+import { feature, merge } from "topojson-client";
 import detailedAtlas from "world-atlas/countries-50m.json";
 import vectorAtlas from "world-atlas/countries-10m.json";
 import legacyAtlas from "world-atlas/countries-110m.json";
@@ -31,6 +31,23 @@ const LEGACY_MAP_H = 360;
 const VECTOR_MASK_W = MAP_W;
 const VECTOR_MASK_H = MAP_H;
 const CURRENT_MAP_REVISION = 7;
+
+const vectorProjection = geoEquirectangular().translate([1, .5]).scale(1 / Math.PI).precision(.000015);
+const vectorPath = geoPath(vectorProjection).pointRadius(.0014).digits(7);
+const vectorTopology = vectorAtlas as unknown as { objects: { countries: { geometries: Array<{ id: string | number; type: string; arcs?: unknown }> } } };
+const vectorGeometryByNumeric = new Map<string, { id: string | number; type: string; arcs?: unknown }>();
+for (const geometry of vectorTopology.objects.countries.geometries) {
+  if (geometry.id !== undefined) {
+    vectorGeometryByNumeric.set(String(geometry.id).padStart(3, "0"), geometry);
+  }
+}
+const numericByIso = new Map<string, string>();
+for (const row of worldCountries as Array<{ cca2?: string; ccn3?: string }>) {
+  if (row.cca2 && row.ccn3) {
+    numericByIso.set(row.cca2, String(row.ccn3).padStart(3, "0"));
+  }
+}
+
 const FLAG_TEXTURE_W = 192;
 const FLAG_TEXTURE_H = 128;
 const LAND_KM2 = 148_940_000;
@@ -237,6 +254,7 @@ export type Country = {
   id: number;
   iso: string;
   iso3?: string;
+  numeric?: string;
   name: string;
   flag: string;
   color: [number, number, number];
@@ -872,6 +890,10 @@ export class WorldEngine {
   private vectorHasChanges = false;
   private readonly vectorChangedPixels = new Uint8Array(VECTOR_MASK_W * VECTOR_MASK_H);
   private readonly vectorChangedRows = new Uint8Array(VECTOR_MASK_H);
+  private readonly initialVectorPaths = new Map<number, string>();
+  private readonly currentVectorPaths = new Map<number, string>();
+  private readonly annexations = new Map<number, number>();
+  private readonly eliminatedCountryIds = new Set<number>();
   private readonly playerPolicyState: PlayerPolicyState = { decisions: createPlayerPolicyDecisionDefaults(), activePolicies: [], decisionPoints: 1, lastDecisionTurn: 0 };
 
   private constructor(countries: Country[], owners: Int16Array, legacyInitialOwners: Int16Array, seed: number, elevation: Uint16Array<ArrayBufferLike> = new Uint16Array(MAP_W * MAP_H), admin1At: Int16Array<ArrayBufferLike> = new Int16Array(0), private readonly airports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly ports: Uint16Array<ArrayBufferLike> = new Uint16Array(0), private readonly populationGrid: Float32Array<ArrayBufferLike> = new Float32Array(0), private readonly vectorPaths: Array<{ countryId: number; path: string }> = []) {
@@ -889,6 +911,10 @@ export class WorldEngine {
     this.warExhaustion = countries.map(() => 0);
     this.capitalStates = this.initialWarCapitalStates();
     this.warMinShare = countries.map(() => 1);
+    for (const { countryId, path } of vectorPaths) {
+      this.initialVectorPaths.set(countryId, path);
+      this.currentVectorPaths.set(countryId, path);
+    }
     for (let y = 0; y < MAP_H; y++) {
       const latitude = 90 - ((y + 0.5) / MAP_H) * 180;
       this.rowWeight[y] = Math.max(0.02, Math.cos(latitude * Math.PI / 180));
@@ -964,12 +990,13 @@ export class WorldEngine {
       .sort((a, b) => a.numeric.localeCompare(b.numeric));
     const usable: MappedCountry[] = [...baseUsable, ...additionalUsable];
 
-    const countries: Country[] = usable.map(({ row }, id) => {
+    const countries: Country[] = usable.map(({ row, numeric }, id) => {
       const capital = CAPITALS[row.cca2];
       return {
         id,
         iso: row.cca2,
         iso3: row.cca3,
+        numeric,
         name: POLISH_NAME_OVERRIDES[row.cca2] ?? displayNames?.of(row.cca2) ?? row.translations?.pol?.common ?? row.name.common,
         flag: row.flag ?? "◈",
         color: hslToRgb((id * 137.508 + 17) % 360, 60 + (id % 3) * 3, 47 + (id % 4) * 2),
@@ -986,6 +1013,7 @@ export class WorldEngine {
         id,
         iso: "GF",
         iso3: "GUF",
+        numeric: frenchGuianaRow.ccn3 || "254",
         name: POLISH_NAME_OVERRIDES.GF,
         flag: frenchGuianaRow.flag ?? "🇬🇫",
         color: hslToRgb((id * 137.508 + 17) % 360, 60 + (id % 3) * 3, 47 + (id % 4) * 2),
@@ -1967,7 +1995,22 @@ export class WorldEngine {
   }
 
   getVectorMapCountries(): VectorMapCountry[] {
-    return this.vectorPaths.map(({ countryId, path }) => ({ countryId, path, fill: this.vectorFill(countryId) }));
+    if (!this.currentVectorPaths.size) {
+      return this.vectorPaths.map(({ countryId, path }) => ({ countryId, path, fill: this.vectorFill(countryId) }));
+    }
+    const result: VectorMapCountry[] = [];
+    for (const [countryId, path] of this.currentVectorPaths) {
+      if (path.length > 0) {
+        result.push({ countryId, path, fill: this.vectorFill(countryId) });
+      }
+    }
+    return result;
+  }
+
+  private atlasOwner(source: number): number {
+    const initial = this.initialOwners[source];
+    if (initial < 0 || !this.annexations.size) return initial;
+    return this.annexations.get(initial) ?? initial;
   }
 
   private updateVectorChangedPixels(indices?: Iterable<number>, rebuild = false) {
@@ -1976,7 +2019,7 @@ export class WorldEngine {
       this.vectorChangedRows.fill(0);
       this.vectorHasChanges = false;
       for (let source = 0; source < this.owners.length; source++) {
-        if (this.owners[source] === this.initialOwners[source]) continue;
+        if (this.owners[source] === this.atlasOwner(source)) continue;
         this.vectorChangedPixels[source] = 1;
         this.vectorChangedRows[Math.floor(source / MAP_W)] = 1;
         this.vectorHasChanges = true;
@@ -1984,7 +2027,7 @@ export class WorldEngine {
     } else if (indices) {
       for (const source of indices) {
         if (source < 0 || source >= this.owners.length) continue;
-        const changed = this.owners[source] !== this.initialOwners[source];
+        const changed = this.owners[source] !== this.atlasOwner(source);
         this.vectorChangedPixels[source] = changed ? 1 : 0;
         if (changed) { this.vectorHasChanges = true; this.vectorChangedRows[Math.floor(source / MAP_W)] = 1; }
       }
@@ -1992,6 +2035,111 @@ export class WorldEngine {
     this.vectorChangeLayerRevision = -1;
     this.vectorChangeLayers = [];
   }
+
+  private getCountryGeometry(countryId: number): { id: string | number; type: string; arcs?: unknown } | undefined {
+    const country = this.countries[countryId];
+    if (!country) return undefined;
+    const num = (country.numeric ? String(country.numeric).padStart(3, "0") : "") || numericByIso.get(country.iso ?? "") || "";
+    return num ? vectorGeometryByNumeric.get(num.padStart(3, "0")) : undefined;
+  }
+
+  private rebuildVectorPathFor(countryId: number) {
+    if (!this.initialVectorPaths.size) return;
+    const initial = this.initialVectorPaths.get(countryId);
+    const annexedIds: number[] = [];
+    for (const [annexed, owner] of this.annexations) {
+      if (owner === countryId) annexedIds.push(annexed);
+    }
+    if (!annexedIds.length) {
+      if (initial !== undefined) this.currentVectorPaths.set(countryId, initial);
+      return;
+    }
+    const countryIds = [countryId, ...annexedIds];
+    const geometries = countryIds
+      .map((id) => this.getCountryGeometry(id))
+      .filter((g): g is NonNullable<typeof g> => Boolean(g));
+    if (geometries.length > 1 && geometries.length === countryIds.length) {
+      try {
+        const merged = merge(vectorAtlas as never, geometries as never);
+        const path = vectorPath(merged);
+        if (path) {
+          this.currentVectorPaths.set(countryId, path);
+          for (const annexed of annexedIds) {
+            this.currentVectorPaths.set(annexed, "");
+          }
+          return;
+        }
+      } catch {
+        // Fallback: keep initial path if merge fails
+      }
+    }
+    if (initial !== undefined) this.currentVectorPaths.set(countryId, initial);
+    for (const annexed of annexedIds) {
+      this.annexations.delete(annexed);
+      const initAnnexed = this.initialVectorPaths.get(annexed);
+      if (initAnnexed !== undefined) this.currentVectorPaths.set(annexed, initAnnexed);
+    }
+  }
+
+  private syncAnnexations(): boolean {
+    if (!this.initialVectorPaths.size) return false;
+    const currentStats = this.stats();
+    this.eliminatedCountryIds.clear();
+    for (const country of this.countries) {
+      if (country.initialWeight > 0 && currentStats[country.id].cells === 0) {
+        this.eliminatedCountryIds.add(country.id);
+      }
+    }
+    const dominantOwner = new Map<number, number>();
+    const isSplit = new Set<number>();
+    if (this.eliminatedCountryIds.size > 0) {
+      const eliminatedArr = new Uint8Array(this.countries.length);
+      for (const id of this.eliminatedCountryIds) eliminatedArr[id] = 1;
+      for (let i = 0; i < this.owners.length; i++) {
+        const init = this.initialOwners[i];
+        if (init >= 0 && eliminatedArr[init] && !isSplit.has(init)) {
+          const cur = this.owners[i];
+          if (cur >= 0) {
+            const prev = dominantOwner.get(init);
+            if (prev === undefined) {
+              dominantOwner.set(init, cur);
+            } else if (prev !== cur) {
+              dominantOwner.delete(init);
+              isSplit.add(init);
+            }
+          }
+        }
+      }
+    }
+    for (const [annexed, owner] of dominantOwner) {
+      if (owner === annexed || !this.getCountryGeometry(annexed) || !this.getCountryGeometry(owner)) {
+        dominantOwner.delete(annexed);
+      }
+    }
+    let changed = dominantOwner.size !== this.annexations.size;
+    if (!changed) {
+      for (const [annexed, owner] of dominantOwner) {
+        if (this.annexations.get(annexed) !== owner) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (!changed) return false;
+
+    this.annexations.clear();
+    for (const [annexed, owner] of dominantOwner) {
+      this.annexations.set(annexed, owner);
+    }
+    for (const country of this.countries) {
+      if (!this.annexations.has(country.id)) {
+        this.rebuildVectorPathFor(country.id);
+      }
+    }
+    this.updateVectorChangedPixels(undefined, true);
+    return true;
+  }
+
 
   /** Draw only territory changed by the simulation over the detailed atlas.
    * Keeping the base atlas intact avoids exposing the coarse interaction canvas. */
@@ -4830,7 +4978,15 @@ export class WorldEngine {
       ...(warExhaustionBefore ? { warExhaustion: warExhaustionBefore } : {}), ...(capitalStatesBefore ? { capitalStates: capitalStatesBefore } : {}), ...(warMinShareBefore ? { warMinShare: warMinShareBefore } : {}),
     }].slice(-40);
     const changedIndices = changed.map(([index]) => index);
-    this.updateVectorChangedPixels(changedIndices);
+    const newElimination = Boolean(eliminated && target);
+    const touchesAnnexed = this.eliminatedCountryIds.size > 0 &&
+      changed.some(([index]) => this.eliminatedCountryIds.has(this.initialOwners[index]));
+    const didSync = this.initialVectorPaths.size > 0 && (newElimination || touchesAnnexed || Boolean(cataclysmRecord))
+      ? this.syncAnnexations()
+      : false;
+    if (!didSync) {
+      this.updateVectorChangedPixels(changedIndices);
+    }
     return { record, changedIndices, ...(cataclysmRecord ? { cataclysmRecord } : {}) };
   }
 
@@ -4842,7 +4998,6 @@ export class WorldEngine {
     if (this.gameMode === "war") this.warUndosLeft--;
     const reversedChanges = undo.changed.map(([index]) => [index, this.owners[index]] as [number, number]);
     for (let i = undo.changed.length - 1; i >= 0; i--) this.owners[undo.changed[i][0]] = undo.changed[i][1];
-    this.updateVectorChangedPixels(undo.changed.map(([index]) => index));
     this.countries[undo.countryId].color = [undo.color[0], undo.color[1], undo.color[2]];
     if (undo.defeatedId !== null) this.defeats[undo.countryId] = Math.max(0, this.defeats[undo.countryId] - 1);
     this.commitOwnerChanges(reversedChanges);
@@ -4852,6 +5007,14 @@ export class WorldEngine {
     if (undo.warMinShare) this.warMinShare = [...undo.warMinShare];
     this.turn = Math.max(0, this.turn - 1);
     for (let entry = 0; entry < (undo.historyEntries ?? 1); entry++) this.history.pop();
+    const touchesAnnexed = this.eliminatedCountryIds.size > 0 &&
+      undo.changed.some(([index]) => this.eliminatedCountryIds.has(this.initialOwners[index]));
+    const didSync = this.initialVectorPaths.size > 0 && (undo.defeatedId !== null || touchesAnnexed)
+      ? this.syncAnnexations()
+      : false;
+    if (!didSync) {
+      this.updateVectorChangedPixels(undo.changed.map(([index]) => index));
+    }
     return true;
   }
   reset(seed = freshSeed(), mode: GameMode = this.gameMode, region: GameRegion = this.gameRegion, microstates: MicrostateRule = this.microstateRule, options?: { cataclysm?: boolean }) {
@@ -4884,6 +5047,11 @@ export class WorldEngine {
     else { this.strategicProvinceAt = new Int32Array(0); this.strategicAdministrativeAt = new Int32Array(0); this.strategicRegions = []; this.strategicRegionRuns = []; this.strategicCampaigns = []; this.strategicTerritoryLog = []; this.strategicOccupations = []; this.strategicBattleArtifacts = []; this.strategicWarHistory = []; this.strategicPendingCasualties = this.countries.map(() => 0); this.strategicExhaustion = this.countries.map(() => 0); this.strategicPolitics = []; this.strategicRelations.clear(); this.strategicDefenseState = { posture: "continue", focusRegionId: null, mobilizedUntil: 0, mobilizationCooldownUntil: 0 }; }
     if (mode !== "strategy") { this.strategicCapitals = []; this.pendingCapitalRelocations.clear(); }
     this.regionalPopulation = [];
+    this.annexations.clear();
+    this.eliminatedCountryIds.clear();
+    for (const [countryId, path] of this.initialVectorPaths) {
+      this.currentVectorPaths.set(countryId, path);
+    }
     this.vectorChangedPixels.fill(0);
     this.vectorChangedRows.fill(0);
     this.vectorHasChanges = false;
@@ -5002,6 +5170,7 @@ export class WorldEngine {
     }
     const nextHistory = snapshot.history.slice(-120).map((record) => ({ ...record }));
     this.owners.set(nextOwners);
+    this.statsRevision = -1;
     this.seed = snapshot.seed; this.rngState = snapshot.rngState; this.gameMode = snapshot.mode ?? "full"; this.gameRegion = snapshot.region ?? "world"; this.microstateRule = snapshot.microstates ?? "all"; this.playerCountryId = snapshot.playerCountryId ?? null; this.cataclysmEnabled = snapshot.cataclysmEnabled ?? false; this.turn = snapshot.turn;
     if (this.gameMode === "strategy") {
       this.buildStrategicRegions();
@@ -5102,6 +5271,7 @@ export class WorldEngine {
     this.strategicQuarterStart = snapshot.strategicQuarterStartV1 ? structuredClone(snapshot.strategicQuarterStartV1) : this.countries.map(({ id }) => ({ ...this.strategicComponents(id) }));
     this.strategicComponentCache.clear();
     this.strategicPowerCache.clear();
+    this.syncAnnexations();
     this.updateVectorChangedPixels(undefined, true);
     this.visualRevision++;
   }
