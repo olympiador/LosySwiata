@@ -353,6 +353,7 @@ export default function Home() {
   const panRef = useRef<Point>({ x: 0, y: 0 });
   const interactiveFrameRef = useRef<number | null>(null);
   const wheelCommitTimerRef = useRef<number | null>(null);
+  const wheelFrameRef = useRef<DOMRect | null>(null);
   const viewSizeRef = useRef({ width: 1, height: 1 });
   const autosaveTimerRef = useRef<number | null>(null);
   const autosaveIdleRef = useRef<number | null>(null);
@@ -450,6 +451,8 @@ export default function Home() {
     }, 180);
   }, []);
 
+  const rasterMapVisible = gameMode === "strategy" || mapStyle === "flags" || mapStyle === "hybrid";
+
   const drawInteractiveView = useCallback(() => {
     if (interactiveFrameRef.current !== null) return;
     interactiveFrameRef.current = window.requestAnimationFrame(() => {
@@ -461,23 +464,25 @@ export default function Home() {
         const panX = panRef.current.x / Math.max(1, rect.width), panY = panRef.current.y / Math.max(1, rect.height);
         vectorMapRef.current.setAttribute("viewBox", `${1 - panX * 2 / zoomRef.current - width / 2} ${.5 - panY / zoomRef.current - height / 2} ${width} ${height}`);
       }
-      const renderer = mapRendererRef.current;
-      if (!renderer) return;
-      if (!renderer.screenSpaceBorders) {
-        paintRef.current();
-        return;
+      if (rasterMapVisible) {
+        const renderer = mapRendererRef.current;
+        if (!renderer) return;
+        if (!renderer.screenSpaceBorders) {
+          paintRef.current();
+          return;
+        }
+        const focusedRegionId = strategicTargetId ?? inspectedSectorId;
+        renderer.draw({
+          zoom: zoomRef.current,
+          panX: panRef.current.x / Math.max(1, rect.width),
+          panY: -panRef.current.y / Math.max(1, rect.height),
+          selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1,
+          selectedRegion: focusedRegionId === null ? 0 : focusedRegionId + 1,
+          interacting: true,
+        });
       }
-      const focusedRegionId = strategicTargetId ?? inspectedSectorId;
-      renderer.draw({
-        zoom: zoomRef.current,
-        panX: panRef.current.x / Math.max(1, rect.width),
-        panY: -panRef.current.y / Math.max(1, rect.height),
-        selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1,
-        selectedRegion: focusedRegionId === null ? 0 : focusedRegionId + 1,
-        interacting: true,
-      });
     });
-  }, [inspectedSectorId, strategicTargetId]);
+  }, [inspectedSectorId, rasterMapVisible, strategicTargetId]);
 
   const applyView = useCallback((nextZoom: number, nextPan: Point, commit = true) => {
     const clampedZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom));
@@ -494,6 +499,12 @@ export default function Home() {
     zoomRef.current = clampedZoom;
     panRef.current = clampedPan;
     if (commit) {
+      if (vectorMapRef.current) {
+        const width = 2 / clampedZoom, height = 1 / clampedZoom;
+        const panX = clampedPan.x / Math.max(1, rect?.width ?? 1);
+        const panY = clampedPan.y / Math.max(1, rect?.height ?? 1);
+        vectorMapRef.current.setAttribute("viewBox", `${1 - panX * 2 / clampedZoom - width / 2} ${.5 - panY / clampedZoom - height / 2} ${width} ${height}`);
+      }
       setZoom(clampedZoom);
       setPan(clampedPan);
       setHover(null);
@@ -504,6 +515,13 @@ export default function Home() {
     if (interactiveFrameRef.current !== null) {
       window.cancelAnimationFrame(interactiveFrameRef.current);
       interactiveFrameRef.current = null;
+    }
+    if (vectorMapRef.current) {
+      const rect = viewSizeRef.current;
+      const width = 2 / zoomRef.current, height = 1 / zoomRef.current;
+      const panX = panRef.current.x / Math.max(1, rect.width);
+      const panY = panRef.current.y / Math.max(1, rect.height);
+      vectorMapRef.current.setAttribute("viewBox", `${1 - panX * 2 / zoomRef.current - width / 2} ${.5 - panY / zoomRef.current - height / 2} ${width} ${height}`);
     }
     setZoom(zoomRef.current);
     setPan({ ...panRef.current });
@@ -678,21 +696,23 @@ export default function Home() {
     const viewport = deepViewport ? { panX: panRef.current.x / Math.max(1, rect.width), panY: panRef.current.y / Math.max(1, rect.height) } : undefined;
     const viewportKey = viewport ? `${viewport.panX.toFixed(5)}:${viewport.panY.toFixed(5)}:${zoomRef.current.toFixed(3)}` : "world";
     const backdropKey = `${engine.getMapRevision()}:${mapStyle}:${selectedRef.current ?? -1}:${activeTurnRef.current ?? -1}:${highlightKey}:${backdropWidth}:${fallbackBorderZoom}:${viewportKey}`;
-    if (backdropKey !== backdropKeyRef.current) {
-      if (backdrop.width !== backdropWidth || backdrop.height !== backdropHeight) { backdrop.width = backdropWidth; backdrop.height = backdropHeight; }
-      const borderZoom = mapRendererRef.current.screenSpaceBorders ? 1 : zoomRef.current;
-      engine.render(backdrop, renderHighlight, selectedRef.current, borderZoom, mapStyle, false, viewport, mapRendererRef.current.screenSpaceBorders);
-      if (outline.width !== backdropWidth || outline.height !== backdropHeight) { outline.width = backdropWidth; outline.height = backdropHeight; }
-      engine.renderTurnOutline(outline, activeTurnRef.current, deepViewport ? zoomRef.current : 1, viewport);
-      if (mapRendererRef.current.screenSpaceBorders) {
-        boundaryIdentityRef.current ??= document.createElement("canvas");
-        boundaryAdministrativeRef.current ??= document.createElement("canvas");
-        engine.renderBoundaryIds(boundaryIdentityRef.current, boundaryAdministrativeRef.current, backdropWidth, backdropHeight);
+    if (rasterMapVisible) {
+      if (backdropKey !== backdropKeyRef.current) {
+        if (backdrop.width !== backdropWidth || backdrop.height !== backdropHeight) { backdrop.width = backdropWidth; backdrop.height = backdropHeight; }
+        const borderZoom = mapRendererRef.current.screenSpaceBorders ? 1 : zoomRef.current;
+        engine.render(backdrop, renderHighlight, selectedRef.current, borderZoom, mapStyle, false, viewport, mapRendererRef.current.screenSpaceBorders);
+        if (outline.width !== backdropWidth || outline.height !== backdropHeight) { outline.width = backdropWidth; outline.height = backdropHeight; }
+        engine.renderTurnOutline(outline, activeTurnRef.current, deepViewport ? zoomRef.current : 1, viewport);
+        if (mapRendererRef.current.screenSpaceBorders) {
+          boundaryIdentityRef.current ??= document.createElement("canvas");
+          boundaryAdministrativeRef.current ??= document.createElement("canvas");
+          engine.renderBoundaryIds(boundaryIdentityRef.current, boundaryAdministrativeRef.current, backdropWidth, backdropHeight);
+        }
+        mapRendererRef.current.upload(backdrop, outline, boundaryIdentityRef.current ?? undefined, boundaryAdministrativeRef.current ?? undefined, deepViewport);
+        backdropKeyRef.current = backdropKey;
       }
-      mapRendererRef.current.upload(backdrop, outline, boundaryIdentityRef.current ?? undefined, boundaryAdministrativeRef.current ?? undefined, deepViewport);
-      backdropKeyRef.current = backdropKey;
+      mapRendererRef.current.draw({ zoom: zoomRef.current, panX: panRef.current.x / Math.max(1, rect.width), panY: -panRef.current.y / Math.max(1, rect.height), selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1, selectedRegion: focusedRegionId === null ? 0 : focusedRegionId + 1 });
     }
-    mapRendererRef.current.draw({ zoom: zoomRef.current, panX: panRef.current.x / Math.max(1, rect.width), panY: -panRef.current.y / Math.max(1, rect.height), selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1, selectedRegion: focusedRegionId === null ? 0 : focusedRegionId + 1 });
     if (mapStyle === "labels" || mapStyle === "relief") {
       const labelViewKey = `${dataVersionRef.current}:${width}:${Math.round(rect.width)}:${zoomRef.current.toFixed(3)}`;
       if (labelViewKey !== labelViewKeyRef.current) {
@@ -706,8 +726,7 @@ export default function Home() {
       labelKeyRef.current = "";
       setMapLabels([]);
     }
-  }, [engine, inspectedSectorId, mapLabels.length, mapStyle, strategicTargetId]);
-  const rasterMapVisible = gameMode === "strategy" || mapStyle === "flags" || mapStyle === "hybrid";
+  }, [engine, inspectedSectorId, mapLabels.length, mapStyle, rasterMapVisible, strategicTargetId]);
 
   useEffect(() => { paintRef.current = paint; }, [paint]);
   useEffect(() => {
@@ -723,7 +742,10 @@ export default function Home() {
     return () => {
       window.removeEventListener("pagehide", flushAutosave);
       if (interactiveFrameRef.current !== null) window.cancelAnimationFrame(interactiveFrameRef.current);
-      if (wheelCommitTimerRef.current !== null) window.clearTimeout(wheelCommitTimerRef.current);
+      if (wheelCommitTimerRef.current !== null) {
+        window.clearTimeout(wheelCommitTimerRef.current);
+        wheelFrameRef.current = null;
+      }
       if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
       if (autosaveIdleRef.current !== null) (window as unknown as { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback?.(autosaveIdleRef.current);
       flushAutosave();
@@ -768,13 +790,15 @@ export default function Home() {
 
   useEffect(() => {
     if (!mapRef.current) return;
-    if (mapRendererRef.current && !mapRendererRef.current.screenSpaceBorders) {
+    if (rasterMapVisible && mapRendererRef.current && !mapRendererRef.current.screenSpaceBorders) {
       if (zoom > 12) { paint(); return; }
       const borderZoom = Math.round(zoom * 20);
       if (borderZoom !== fallbackBorderZoomRef.current) { paint(); return; }
     }
-    mapRendererRef.current?.draw({ zoom, panX: pan.x / Math.max(1, mapSize.width), panY: -pan.y / Math.max(1, mapSize.height), selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1, selectedRegion: strategicTargetId === null ? 0 : strategicTargetId + 1 });
-  }, [mapSize.height, mapSize.width, paint, pan, strategicTargetId, zoom]);
+    if (rasterMapVisible) {
+      mapRendererRef.current?.draw({ zoom, panX: pan.x / Math.max(1, mapSize.width), panY: -pan.y / Math.max(1, mapSize.height), selectedOwner: selectedRef.current === null ? 0 : selectedRef.current + 1, selectedRegion: strategicTargetId === null ? 0 : strategicTargetId + 1 });
+    }
+  }, [mapSize.height, mapSize.width, paint, pan, rasterMapVisible, strategicTargetId, zoom]);
 
   const spin = useCallback(async (field: WheelKey, pool: string[], final: string, duration: number) => {
     setActiveWheel(field);
@@ -1422,7 +1446,8 @@ export default function Home() {
 
   const wheelZoom = (event: ReactWheelEvent<HTMLCanvasElement>) => {
     event.preventDefault();
-    const frame = event.currentTarget.getBoundingClientRect();
+    const frame = wheelFrameRef.current ?? event.currentTarget.getBoundingClientRect();
+    wheelFrameRef.current = frame;
     viewSizeRef.current = { width: frame.width, height: frame.height };
     const oldZoom = zoomRef.current;
     const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, oldZoom * Math.exp(-event.deltaY * .0015)));
@@ -1438,6 +1463,7 @@ export default function Home() {
     if (wheelCommitTimerRef.current !== null) window.clearTimeout(wheelCommitTimerRef.current);
     wheelCommitTimerRef.current = window.setTimeout(() => {
       wheelCommitTimerRef.current = null;
+      wheelFrameRef.current = null;
       commitInteractiveView();
       mapRef.current?.classList.remove("is-map-dragging");
     }, 110);

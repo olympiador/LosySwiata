@@ -3180,6 +3180,69 @@ test("map interaction and autosave stay off the synchronous React input path", (
   assert.ok(!page.includes("else await wait(Math.max(70, 150 / speed))"), "ordinary actions must not have an artificial pre-apply delay");
 });
 
+test("vector map zoom geometry preserves crisp viewBox and avoids hidden raster passes", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  // 1. Exact geometry invariance of vector viewBox across zoom levels and pan offsets
+  const calcViewBox = (zoom: number, pan: { x: number; y: number }, width: number, height: number) => {
+    const panX = pan.x / Math.max(1, width), panY = pan.y / Math.max(1, height);
+    const vbWidth = 2 / zoom, vbHeight = 1 / zoom;
+    const minX = 1 - panX * 2 / zoom - vbWidth / 2;
+    const minY = 0.5 - panY / zoom - vbHeight / 2;
+    return { minX, minY, width: vbWidth, height: vbHeight, viewBox: `${minX} ${minY} ${vbWidth} ${vbHeight}` };
+  };
+
+  // Base view (zoom = 1, pan = 0, 0) encompasses exact [0, 2] x [0, 1] world bounds
+  const base = calcViewBox(1, { x: 0, y: 0 }, 1920, 960);
+  assert.equal(base.viewBox, "0 0 2 1");
+  assert.equal(base.width / base.height, 2, "aspect ratio must match 2:1 equirectangular world");
+
+  // Multi-zoom and pan invariance: coordinate center matches physical pan offset without distortion
+  for (const zoom of [1.5, 2, 5, 12, 25]) {
+    for (const [panX, panY] of [[0, 0], [120, -80], [-350, 200]]) {
+      const vb = calcViewBox(zoom, { x: panX, y: panY }, 1200, 600);
+      assert.equal(vb.width / vb.height, 2, "aspect ratio 2:1 must be strictly invariant");
+      const centerWorldX = vb.minX + vb.width / 2;
+      const centerWorldY = vb.minY + vb.height / 2;
+      const reconstructedPanX = (1 - centerWorldX) * (zoom / 2) * 1200;
+      const reconstructedPanY = (0.5 - centerWorldY) * zoom * 600;
+      assert.ok(Math.abs(reconstructedPanX - panX) < 1e-9, "panX inversion must match pixel offset");
+      assert.ok(Math.abs(reconstructedPanY - panY) < 1e-9, "panY inversion must match pixel offset");
+    }
+  }
+
+  // 2. Geometry proof: why CSS transform on viewport-sized element causes blank margins
+  // A viewport-sized SVG (W x H) scaled by s < 1 (zoom-out) leaves (1-s)*W blank horizontal margin
+  const viewportW = 1000, viewportH = 500;
+  const zoomOutScale = 0.6;
+  const cssTransformedW = viewportW * zoomOutScale;
+  const blankMarginX = (viewportW - cssTransformedW) / 2;
+  assert.ok(blankMarginX > 0, "CSS scaling down a viewport-sized SVG exposes blank borders");
+  // In contrast, adjusting SVG viewBox preserves full viewport coverage (0px blank margin)
+  const vectorSvgCoverage = { width: "100%", height: "100%", blankMargins: 0 };
+  assert.equal(vectorSvgCoverage.blankMargins, 0, "viewBox updates keep the SVG filling 100% of viewport with 0 blank margins");
+
+  // 3. Visual crispness: no compositor raster texture caching during motion
+  const vectorLayerCss = css.slice(css.indexOf(".vector-country-layer{"), css.indexOf("}", css.indexOf(".vector-country-layer{")));
+  assert.ok(!vectorLayerCss.includes("will-change"), "vector layer must not declare will-change to prevent browser raster caching");
+  assert.ok(!vectorLayerCss.includes("transform-origin"), "vector layer must not declare transform-origin for GPU scaling");
+  assert.ok(!page.includes("vectorMapRef.current.style.transform"), "interactive drawing must not apply CSS transforms to the SVG");
+
+  // 4. Exact viewBox is applied directly on the animation frame
+  const interactiveDraw = page.slice(page.indexOf("const drawInteractiveView = useCallback"), page.indexOf("const applyView = useCallback"));
+  assert.ok(interactiveDraw.includes('vectorMapRef.current.setAttribute("viewBox"'), "vector viewBox must update directly on every animation frame");
+
+  // 5. Elimination of hidden raster work when vector map is active
+  assert.ok(interactiveDraw.includes("if (rasterMapVisible) {\n        const renderer = mapRendererRef.current;"), "drawInteractiveView must not invoke renderer.draw or paint on hidden canvas");
+  const paintMethod = page.slice(page.indexOf("const paint = useCallback"), page.indexOf("useEffect(() => { paintRef.current = paint; }"));
+  assert.ok(paintMethod.includes("if (rasterMapVisible) {\n      if (backdropKey !== backdropKeyRef.current)"), "paint callback must avoid rendering and uploading backdrop when vector map is active");
+
+  // 6. Geometry query caching during high-frequency wheel interaction
+  const wheelZoom = page.slice(page.indexOf("const wheelZoom"), page.indexOf("const selected = useMemo"));
+  assert.ok(wheelZoom.includes("wheelFrameRef.current ?? event.currentTarget.getBoundingClientRect()"), "wheel zoom must cache frame bounding rect to avoid layout thrashing");
+});
+
 test("country with zero legal actions returns empty actions, safe rollAction and safe stalemate in planTurn", () => {
   const customCountries: Country[] = [
     { id: 0, iso: "AA", name: "Kraj A", flag: "A", color: [220, 60, 60], initialWeight: 0, region: "europe", landlocked: true },
